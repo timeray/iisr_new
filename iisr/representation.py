@@ -1,7 +1,7 @@
 """
 Collect classes for IISR data representation.
 """
-__all__ = ['Parameters', 'SignalTimeSeries', 'SignalBlock']
+__all__ = ['Parameters', 'SignalTimeSeries', 'SignalBlock', 'CHANNELS_NUMBER_INFO']
 
 
 class Parameters:
@@ -18,9 +18,6 @@ class Parameters:
 
         self.rest_raw_parameters = None
 
-    def to_raw_parameters(self):
-        raise NotImplementedError()
-
     def __str__(self):
         msg = [
             '==== Parameters ====',
@@ -34,8 +31,9 @@ class Parameters:
             'Phase code: {}'.format(self.phase_code),
             'Rest raw parameters:'
         ]
-        for k, v in self.rest_raw_parameters.items():
-            msg.append('\t{}:  {}'.format(k, v))
+        if self.rest_raw_parameters is not None:
+            for k, v in self.rest_raw_parameters.items():
+                msg.append('\t{}:  {}'.format(k, v))
         return '\n'.join(msg)
 
 
@@ -47,7 +45,7 @@ class SignalTimeSeries:
         """
         Parameters
         ----------
-        time_mark: datetime
+        time_mark: datetime.datetime
         parameters: Parameters
         quadratures: ndarray of complex numbers
         """
@@ -86,7 +84,7 @@ class SignalBlock:
         self.time_mark = time_mark
         self.time_series_list = time_series_list
 
-# Channels 0, 2 for narrowband pulse, channels 1, 3 for wideband pulse
+# Channels 0, 2 for narrow band pulse, channels 1, 3 for wide band pulse
 CHANNELS_NUMBER_INFO = {
     0: {'type': 'long', 'horn': 'upper'},
     1: {'type': 'short', 'horn': 'upper'},

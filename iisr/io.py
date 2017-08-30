@@ -18,6 +18,7 @@ from iisr.representation import CHANNELS_NUMBER_INFO
 
 __all__ = ['read', 'read_files_by_blocks', 'read_files_by_series']
 FILE_EXTENSIONS = ('.ISE', '.ISE.GZ', '.IST', '.IST.GZ')
+DELAY_FORMULA_CONSTANT = -960 - 50
 KEYWORD = b'ORDA'
 BYTEORDER = 'little'
 HEADER_CODES = {'super': 1, 'data': 2, 'global': 3}
@@ -220,7 +221,8 @@ def read(file_path, only_headers=False):
             header_code, block_length = _handle_header(file_stream)
 
             if header_code == HEADER_CODES['global']:
-                global_parameters = _handle_raw_parameters_block(file_stream, block_length)
+                global_parameters = _handle_raw_parameters_block(file_stream,
+                                                                 block_length)
                 break
             elif header_code is None:
                 raise ReadError('Global header not found in file {}.'.format(file_path))
@@ -260,7 +262,6 @@ def read(file_path, only_headers=False):
             # Create annotated signal time series (realization)
             raw_parameters = global_parameters.copy()
             raw_parameters.update(super_parameters)
-            print(raw_parameters)
             time_mark, parameters = raw2refined_parameters(raw_parameters, data_length)
             time_series = SignalTimeSeries(time_mark, parameters, quadratures)
             yield time_series
@@ -406,6 +407,7 @@ def _check_raw_parameters(raw_parameters):
 def raw2refined_parameters(raw_parameters, data_byte_length):
     """
     Process raw parameters of IISR data files to get convenient parameters and time.
+    Consume parameters from raw_parameters to reduce memory usage.
 
     Parameters
     ----------
@@ -450,7 +452,7 @@ def raw2refined_parameters(raw_parameters, data_byte_length):
         long_pulse_len = 0
 
     # Magic vague formula to calculate total delay
-    total_delay = first_delay - 960 - offset_st1 - 50 - long_pulse_len
+    total_delay = first_delay - offset_st1 - long_pulse_len + DELAY_FORMULA_CONSTANT
 
     # Time
     month_day = raw_parameters.pop('date_mon_day')
@@ -492,8 +494,8 @@ def raw2refined_parameters(raw_parameters, data_byte_length):
     return time, parameters
 
 
-def refined2raw_parameters(time_mark, refined_parameters, default_first_delay=2150,
-                           default_offset_st1=80, decimation=2):
+def refined2raw_parameters(time_mark, refined_parameters, default_offset_st1=80,
+                           decimation=2):
     """
     Build raw parameters dictionary from refined parameters.
 
@@ -501,8 +503,6 @@ def refined2raw_parameters(time_mark, refined_parameters, default_first_delay=21
     ----------
     time_mark: datetime
     refined_parameters: Parameters
-    default_first_delay: int
-        Default value of first delay. Applied if first delay is not in refined_parameters.
     default_offset_st1: int
         Default value of receiver offset. Applied if offset is not in refined_parameters.
     decimation: int
@@ -511,6 +511,7 @@ def refined2raw_parameters(time_mark, refined_parameters, default_first_delay=21
     Returns
     -------
     raw_parameters: dict
+        Dictionary of parameters from IISR data files.
     data_byte_length: int
         Length of data block.
     """
@@ -529,11 +530,18 @@ def refined2raw_parameters(time_mark, refined_parameters, default_first_delay=21
     data_byte_length = refined_parameters.n_samples * 4
     raw_parameters['sample_freq'] = refined_parameters.sampling_frequency * decimation
 
-    if 'first_delay' not in raw_parameters:
-        raw_parameters['first_delay'] = default_first_delay
-
     if 'offset_st1' not in raw_parameters:
         raw_parameters['offset_st1'] = default_offset_st1
+
+    if pulse_type is 'long':
+        long_pulse_len = refined_parameters.pulse_length_us
+    else:
+        long_pulse_len = 0
+
+    raw_parameters['first_delay'] = refined_parameters.total_delay \
+                                    + raw_parameters['offset_st1'] \
+                                    + long_pulse_len \
+                                    - DELAY_FORMULA_CONSTANT
 
     raw_parameters['channel'] = refined_parameters.channel
     raw_parameters['phase_code'] = refined_parameters.phase_code
@@ -545,13 +553,13 @@ def refined2raw_parameters(time_mark, refined_parameters, default_first_delay=21
     raw_parameters['date_mon_day'] = (month << 8) + day
     hour = time_mark.hour
     minute = time_mark.minute
-    raw_parameters['time_h_m'] = (hour << 8) + minute
+    raw_parameters['time_h_m'] = (minute << 8) + hour
     raw_parameters['time_sec'] = time_mark.second
     raw_parameters['time_msec'] = time_mark.microsecond // 1000
 
     # Frequency
     frequency_kHz = int(refined_parameters.frequency_MHz * 1000)
-    fr_lo = frequency_kHz & 0x00FF
+    fr_lo = frequency_kHz & 0xFFFF
     fr_hi = frequency_kHz >> 16
     raw_parameters['st1_{}_fr_lo'.format(pulse_type)] = fr_lo
     raw_parameters['st1_{}_fr_hi'.format(pulse_type)] = fr_hi
@@ -595,10 +603,7 @@ def write(file_path, raw_parameters, data_block_length, quadratures):
     quads_i_bytes = (number.to_bytes(2, BYTEORDER, signed=True) for number in quads_i)
     quads_q_bytes = (number.to_bytes(2, BYTEORDER, signed=True) for number in quads_q)
 
-    # data_block = b''.join(map(lambda x: b''.join(x), zip(quads_i_bytes, quads_q_bytes)))
     data_block = b''.join(it.chain(quads_i_bytes, quads_q_bytes))
-    # print(data_block)
-    # data_block = b''.join(it.chain(quads_i_bytes, quads_q_bytes))
     data_header = _create_header(HEADER_CODES['data'], data_block_length)
 
     with open(file_path, 'wb') as file_stream:
