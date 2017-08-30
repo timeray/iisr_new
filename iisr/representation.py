@@ -1,7 +1,7 @@
 """
 Collect classes for IISR data representation.
 """
-__all__ = ['Parameters', 'SignalTimeSeries', 'SignalBlock', 'CHANNELS_NUMBER_INFO']
+__all__ = ['Parameters', 'SignalTimeSeries', 'TimeSeriesPackage', 'CHANNELS_NUMBER_INFO']
 
 
 class Parameters:
@@ -16,7 +16,7 @@ class Parameters:
         self.pulse_type = None
         self.phase_code = None
 
-        self.rest_raw_parameters = None
+        self.rest_raw_parameters = {}
 
     def __str__(self):
         msg = [
@@ -31,10 +31,13 @@ class Parameters:
             'Phase code: {}'.format(self.phase_code),
             'Rest raw parameters:'
         ]
-        if self.rest_raw_parameters is not None:
-            for k, v in self.rest_raw_parameters.items():
-                msg.append('\t{}:  {}'.format(k, v))
+
+        for k, v in self.rest_raw_parameters.items():
+            msg.append('\t{}:  {}'.format(k, v))
         return '\n'.join(msg)
+
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
 
 
 class SignalTimeSeries:
@@ -55,7 +58,10 @@ class SignalTimeSeries:
 
     @property
     def size(self):
-        return self.parameters.n_samples
+        if self.parameters.n_samples is not None:
+            return self.parameters.n_samples
+        else:
+            raise ValueError('parameters n_samples is not initialized')
 
     def __str__(self):
         msg = [
@@ -69,7 +75,7 @@ class SignalTimeSeries:
         return '\n'.join(msg)
 
 
-class SignalBlock:
+class TimeSeriesPackage:
     """
     Stores signal time series that correspond to identical time, i.e. that originate from
     the same pulse.
@@ -78,11 +84,22 @@ class SignalBlock:
         """
         Parameters
         ----------
-        time_mark: datetime
+        time_mark: datetime.datetime
         time_series_list: list of SignalTimeSeries
         """
+        for series in time_series_list:
+            if series.time_mark != time_mark:
+                raise ValueError('Given time series must have identical time_mark: '
+                                 '{} != {}'.format(series.time_mark, time_mark))
+
+        if not time_series_list:
+            raise ValueError('time series list is empty')
+
         self.time_mark = time_mark
         self.time_series_list = time_series_list
+
+    def __iter__(self):
+        return self.time_series_list.__iter__()
 
 # Channels 0, 2 for narrow band pulse, channels 1, 3 for wide band pulse
 CHANNELS_NUMBER_INFO = {

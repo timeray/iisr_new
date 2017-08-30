@@ -2,7 +2,7 @@
 First-stage processing of iisr data.
 
 """
-from iisr.representation import SignalBlock, SignalTimeSeries, Parameters
+from iisr.representation import TimeSeriesPackage, SignalTimeSeries, Parameters
 import iisr.io as dataread
 
 

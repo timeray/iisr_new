@@ -32,7 +32,7 @@ def get_test_raw_parameters(freq=155000, stel='st1', channel=0, year=2015, month
 
 
 def get_test_parameters(n_samples=2048, freq=155.5, pulse_type='long', pulse_len=700,
-                        sampling_freq=1000, channel=0, phase_code=0, total_delay=1000):
+                        sampling_freq=1000., channel=0, phase_code=0, total_delay=1000):
     """
     Returns
     -------

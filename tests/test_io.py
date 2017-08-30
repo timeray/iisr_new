@@ -36,29 +36,33 @@ def make_test_file(n_unique_series=2, n_time_marks=2):
         random.shuffle(pulse_len)
         phase_code = [0, 5]
         random.shuffle(phase_code)
-        for freq, ch, len, code in it.product(freqs, channels, pulse_len, phase_code):
-            yield get_test_parameters(freq=freq, channel=ch, pulse_len=len,
-                                      phase_code=code)
+        for freq, ch, length, code in it.product(freqs, channels, pulse_len, phase_code):
+            pulse_type = CHANNELS_NUMBER_INFO[ch]['type']
+            yield get_test_parameters(freq=freq, channel=ch, pulse_len=length,
+                                      phase_code=code, pulse_type=pulse_type)
 
+    generator = gen_unique_parameters()
     parameter_sets = []
     for i in range(n_unique_series):
-        parameter_sets.append(gen_unique_parameters())
+        parameter_sets.append(generator.__next__())
 
     default_datetime = datetime(2015, 6, 7, 10, 55, 37, 437000)
     series_list = []
     for i in range(n_time_marks):
-        time_mark = default_datetime + timedelta(milliseconds=41)
+        time_mark = default_datetime + timedelta(milliseconds=41*i)
         for parameters in parameter_sets:
             n_samples = parameters.n_samples
-            quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples // 4)
-            quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples // 4)
+            quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
+            quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
             quadratures = quad_i + 1j * quad_q
             series = SignalTimeSeries(time_mark, parameters, quadratures)
             series_list.append(series)
 
+    with io.open_data_file(file_path, 'w') as writer:
+        for series in series_list:
+            writer.write(series)
 
     yield file_path, series_list
-    os.remove(file_path)
 
 
 class TestWriteRead(TestCase):
@@ -68,16 +72,18 @@ class TestWriteRead(TestCase):
         # Create test parameters
         test_parameters = get_test_parameters()
         time_mark = datetime(2015, 6, 7, 10, 55, 37, 437000)
+        n_samples = test_parameters.n_samples
 
-        raw_parameters, data_block_len = io.refined2raw_parameters(time_mark,
-                                                                   test_parameters)
-        test_quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, data_block_len // 4)
-        test_quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, data_block_len // 4)
+        test_quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
+        test_quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
         test_quadratures = test_quad_i + 1j * test_quad_q
 
-        io.write(test_file_path, raw_parameters, data_block_len, test_quadratures)
+        test_series = SignalTimeSeries(time_mark, test_parameters, test_quadratures)
+        with io.open_data_file(test_file_path, 'w') as writer:
+            writer.write(test_series)
 
-        series = next(io.read(test_file_path))
+        with io.open_data_file(test_file_path, 'r') as reader:
+            series = next(reader.read_series())
 
         # Time
         self.assertEqual(time_mark, series.time_mark)
@@ -101,22 +107,33 @@ class TestWriteRead(TestCase):
 
 class TestRead(TestCase):
     def test_read(self):
-        with make_test_file() as test_file_path:
-            series = next(io.read(test_file_path))
+        with make_test_file() as (test_file_path, test_series):
+            with io.open_data_file(test_file_path) as reader:
+                series = next(reader.read_series())
             self.assertIsInstance(series.time_mark, datetime)
             self.assertIsInstance(series.parameters, Parameters)
             self.assertIsInstance(series.quadratures, np.ndarray)
             print(series)
 
     def test_read_by_series(self):
-        with make_test_file() as test_file_path:
+        with make_test_file() as (test_file_path, test_series_list):
             output = io.read_files_by_series(test_file_path)
-            self.assertIsInstance(next(output), SignalTimeSeries)
+            for series, test_series in zip(output, test_series_list):
+                self.assertIsInstance(series, SignalTimeSeries)
+                self.assertEqual(series.time_mark, test_series.time_mark)
+                self.assertEqual(series.parameters.__dict__,
+                                 test_series.parameters.__dict__)
+                self.assertEqual(series.parameters, test_series.parameters)
+                np.testing.assert_array_equal(series.quadratures, test_series.quadratures)
 
     def test_read_by_blocks(self):
-        with make_test_file() as test_file_path:
-            output = io.read_files_by_blocks(test_file_path)
-            self.assertIsInstance(next(output), SignalBlock)
+        with make_test_file() as (test_file_path, test_series):
+            output = io.read_files_by_packages(test_file_path)
+            package = next(output)
+            self.assertIsInstance(package, TimeSeriesPackage)
+            for series in package:
+                self.assertIsInstance(series, SignalTimeSeries)
+                self.assertEqual(package.time_mark, series.time_mark)
 
 
 class TestParametersTransformation(TestCase):
