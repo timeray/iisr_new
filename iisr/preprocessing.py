@@ -15,9 +15,52 @@ class Results:
         pass
 
 
-class RunConfig:
-    def __init__(self, datapaths, mode, channels, frequncies):
-        pass
+class LaunchConfig:
+    def __init__(self, paths, mode, channels, frequencies=None):
+        """
+        Create launch configuration. Check input arguments for validness.
+
+        Parameters
+        ----------
+        paths: list of str
+             Paths to files or directories.
+        mode: 'incoherent', 'satellite' or 'passive'
+            Mode of operation.
+        channels: list of int
+            Channels to process. Must be in [0..3] range.
+        frequencies: list of float or None, default None
+            Frequencies to process, MHz. If None process all frequencies.
+        """
+        if isinstance(paths, str):
+            paths = [paths]
+        for path in paths:
+            if not isinstance(path, str):
+                raise ValueError('Incorrect path: {}'.format(path))
+
+        if mode not in ['incoherent', 'satellite', 'passive']:
+            raise ValueError('Incorrect mode: {}'.format(mode))
+        self.mode = mode
+
+        for ch in channels:
+            if not isinstance(ch, int) and (ch < 0 or ch > 3):
+                raise ValueError('Incorrect channel: {}'.format(ch))
+        self.channels = channels
+
+        if frequencies is not None:
+            for freq in frequencies:
+                if not isinstance(freq, (int, float)) and (freq < 150. or freq > 170.):
+                    raise ValueError('Incorrect frequency: {}'.format(freq))
+        self.frequencies = frequencies
+
+    def __str__(self):
+        msg = [
+            'Launch configuration',
+            '--------------------',
+            'Mode: {}'.format(self.mode),
+            'Channels: {}'.format(self.channels),
+            'Frequencies: {}'.format(self.frequencies),
+        ]
+        return '\n'.join(msg)
 
 
 def read_config():
@@ -26,12 +69,13 @@ def read_config():
 
     Returns
     -------
-    config: RunConfig
+    config: LaunchConfig
     """
     pass
 
 
-def run_processing(config: RunConfig) -> Results:
+def run_processing(config: LaunchConfig) -> Results:
+    print(config)
     parameters = None
     data = None
 
