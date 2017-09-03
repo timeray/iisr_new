@@ -2,7 +2,7 @@
 Command line program for second stage processing.
 Receive type of processing, dates or ID of first stage results, and other option.
 """
-
+from iisr.postprocessing import run_processing
 import argparse
 
 description = """
@@ -20,18 +20,24 @@ Comparison between different power profiles.
 
 
 def spectrum(args):
-    pass
+    run_processing(args.id, args.start_date, args.stop_date, operation='spectrum')
+
+    if args.draw:
+        raise NotImplementedError()
 
 
 def power_comparison(args):
-    pass
+    run_processing(args.id, args.start_date, args.stop_date, operation='power_comparison')
+
+    if args.draw:
+        raise NotImplementedError()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=description)
     subparsers = parser.add_subparsers()
-    parser.add_argument('start_date', help="start date of processing")
-    parser.add_argument('stop_date', help="stop date of processing")
+    parser.add_argument('--start_date', help="start date of processing")
+    parser.add_argument('--stop_date', help="stop date of processing")
     parser.add_argument('ID', help="ID of first stage results")
     parser.add_argument('--draw', action='store_true', default=False,
                         help="draw all corresponding graphs after processing")

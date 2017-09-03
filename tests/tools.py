@@ -31,8 +31,9 @@ def get_test_raw_parameters(freq=155000, stel='st1', channel=0, year=2015, month
     return test_raw_parameters
 
 
-def get_test_parameters(n_samples=2048, freq=155.5, pulse_type='long', pulse_len=700,
-                        sampling_freq=1000., channel=0, phase_code=0, total_delay=1000):
+def get_test_parameters(n_samples=2048, freq=155.5, pulse_len=700,
+                        sampling_freq=1000., channel=0, phase_code=0, total_delay=1000,
+                        rest_raw_parameters=None):
     """
     Returns
     -------
@@ -41,12 +42,14 @@ def get_test_parameters(n_samples=2048, freq=155.5, pulse_type='long', pulse_len
     test_parameters = Parameters()
     test_parameters.n_samples = n_samples
     test_parameters.frequency_MHz = freq
-    test_parameters.pulse_type = pulse_type
+    test_parameters.pulse_type = CHANNELS_NUMBER_INFO[channel]['type']
     test_parameters.pulse_length_us = pulse_len
     test_parameters.sampling_frequency = sampling_freq
     test_parameters.channel = channel
     test_parameters.phase_code = phase_code
     test_parameters.total_delay = total_delay
+    if rest_raw_parameters is not None:
+        test_parameters.rest_raw_parameters = rest_raw_parameters
     return test_parameters
 
 

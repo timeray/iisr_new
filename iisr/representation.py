@@ -5,6 +5,21 @@ __all__ = ['Parameters', 'SignalTimeSeries', 'TimeSeriesPackage', 'CHANNELS_NUMB
 
 
 class Parameters:
+    """
+    Class representing refined parameters.
+    Use REFINED_PARAMETERS to access main parameter names.
+    """
+    REFINED_PARAMETERS = {
+        'sampling_frequency',
+        'n_samples',
+        'total_delay',
+        'channel',
+        'frequency_MHz',
+        'pulse_length_us',
+        'pulse_type',
+        'phase_code'
+    }
+
     def __init__(self):
         self.sampling_frequency = None
         self.n_samples = None
@@ -15,6 +30,8 @@ class Parameters:
         self.pulse_length_us = None
         self.pulse_type = None
         self.phase_code = None
+
+        assert set(self.__dict__.keys()) == self.REFINED_PARAMETERS
 
         self.rest_raw_parameters = {}
 
@@ -101,6 +118,7 @@ class TimeSeriesPackage:
     def __iter__(self):
         return self.time_series_list.__iter__()
 
+
 # Channels 0, 2 for narrow band pulse, channels 1, 3 for wide band pulse
 CHANNELS_NUMBER_INFO = {
     0: {'type': 'long', 'horn': 'upper'},
@@ -108,3 +126,22 @@ CHANNELS_NUMBER_INFO = {
     2: {'type': 'long', 'horn': 'lower'},
     3: {'type': 'short', 'horn': 'lower'}
 }
+
+
+class Results:
+    """Processing results"""
+    def save(self, path_to_dir):
+        """Save results to directory."""
+
+
+class FirstStageResults(Results):
+    def __init__(self, parameters, data):
+        self.parameters = parameters
+        self.data = data
+
+    def save(self, path):
+        pass
+
+
+class SecondStageResults(Results):
+    """Results of second stage processing."""

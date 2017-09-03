@@ -1,6 +1,14 @@
 """
 Contain tools to read IISR data files, *.ISE and *.IST.
-Read experiment realizations - received quadratures with corresponding parameters.
+Read and write experiment realizations - received quadratures with parameters.
+
+There are two representations for parameters of realizations. First is raw parameters,
+which are the options that originate from binary format of the input files. They contain
+all necessary information but are verbose and low level. Second representation is
+refined parameters that store all important information and easy to work with.
+
+Raw parameters are represented by a dictionary.
+Refined parameters are represented by class Parameters.
 """
 
 import contextlib
@@ -66,17 +74,19 @@ RAW_PARAMETERS_CODES = (
 
 
 class DataFileReader:
-    def __init__(self, stream, file_path=''):
+    def __init__(self, stream, file_path='', series_filter=None):
         self.stream = stream
         self.only_headers = False
         self.file_path = file_path
         self._series = self._series_generator()
+        self.filter = series_filter
 
-    def read_series(self, only_headers=False):
+    def read_series(self, only_headers=False, series_filter=None):
         self.only_headers = only_headers
+        self.filter = series_filter
         yield from self._series
 
-    def read_blocks(self, only_headers=False):
+    def read_blocks(self, only_headers=False, series_filter=None):
         """
         Return signal blocks - groups of signal series that belong to identical time.
 
@@ -85,6 +95,8 @@ class DataFileReader:
         only_headers: bool, default False
             If True return only annotation of time series, leaving quadratures field of
             SignalTimeSeries instance as None.
+        series_filter: ParameterFilter, default None
+            Filter for certain parameters.
 
         Yields
         -------
@@ -92,6 +104,7 @@ class DataFileReader:
             Block of realizations corresponding to the same time mark.
         """
         self.only_headers = only_headers
+        self.filter = series_filter
 
         def grouping_condition(series):
             return series.time_mark
@@ -106,12 +119,6 @@ class DataFileReader:
     def _series_generator(self):
         """
         Read headers of iisr datafiles.
-
-        Parameters
-        ----------
-        only_headers: bool, default False
-            If True return only annotation of time series, leaving quadratures field of the
-            SignalTimeSeries instance as None.
 
         Yields
         -------
@@ -158,16 +165,22 @@ class DataFileReader:
                     'Incorrect code [{}] in file {} (data code {} expected)'
                     ''.format(header_code, self.file_path, HEADER_CODES['data']))
 
+            # Form refined parameters
+            raw_parameters = global_parameters.copy()
+            raw_parameters.update(super_parameters)
+            time_mark, parameters = raw2refined_parameters(raw_parameters, data_length)
+
+            # Check if parameters pass the filter
+            if self.filter is not None:
+                if not self.filter.test_parameters(parameters):
+                    continue
+
             if not self.only_headers:
                 quadratures = self.read_quadratures(data_address, data_length)
             else:
                 quadratures = None
 
             # Create annotated signal time series (realization)
-            raw_parameters = global_parameters.copy()
-            raw_parameters.update(super_parameters)
-            time_mark, parameters = raw2refined_parameters(raw_parameters,
-                                                           data_length)
             time_series = SignalTimeSeries(time_mark, parameters, quadratures)
             yield time_series
 
@@ -205,10 +218,6 @@ class DataFileReader:
     def _read_header(self):
         """
         Search for keyword in data stream.
-
-        Parameters
-        ----------
-        stream: opened file stream
 
         Returns
         -------
@@ -255,7 +264,6 @@ class DataFileReader:
 
         Parameters
         ----------
-        stream: opened file stream
         block_length: int
             Length of block in bytes.
 
@@ -304,14 +312,12 @@ class DataFileWriter:
                                                                   series.parameters)
 
         # Global header
-        global_parameters_names = ['number_all', 'first_delay', 'offset_st1',
-                                   'number_after',
+        global_parameters_names = ['number_all', 'offset_st1', 'number_after',
                                    'mode', 'step', 'sample_freq', 'version']
         global_parameters = {}
         for name in global_parameters_names:
             if name in raw_parameters:
                 global_parameters[name] = raw_parameters.pop(name)
-
         self._write_global_block(global_parameters)
         self._write_super_block(raw_parameters)
         self._write_data_block(series.quadratures, data_byte_length)
@@ -385,7 +391,7 @@ class DataFileWriter:
         return b''.join(block), n_bytes
 
 
-def read_files_by_packages(paths, only_headers=False):
+def read_files_by_packages(paths, only_headers=False, series_filter=None):
     """
     Read all data files using given paths.
 
@@ -396,6 +402,8 @@ def read_files_by_packages(paths, only_headers=False):
         Function does not consider file in subdirectories.
     only_headers: bool, default False
         If True read only headers, not quadratures.
+    series_filter: ParameterFilter, default None
+        Filter for certain parameters.
 
     Yields
     -------
@@ -404,11 +412,13 @@ def read_files_by_packages(paths, only_headers=False):
     """
     file_paths = _collect_valid_file_paths(paths)
     for path in file_paths:
+        print('Process file: {}'.format(path))
         with open_data_file(path) as data_reader:
-            yield from data_reader.read_blocks(only_headers=only_headers)
+            yield from data_reader.read_blocks(only_headers=only_headers,
+                                               series_filter=series_filter)
 
 
-def read_files_by_series(paths, only_headers=False):
+def read_files_by_series(paths, only_headers=False, series_filter=None):
     """
     Read all data files using given paths.
 
@@ -419,6 +429,8 @@ def read_files_by_series(paths, only_headers=False):
         Function does not consider file in subdirectories.
     only_headers: bool, default False
         If True read only headers, not quadratures.
+    series_filter: ParameterFilter, default None
+        Filter for certain parameters.
 
     Yields
     -------
@@ -427,8 +439,10 @@ def read_files_by_series(paths, only_headers=False):
     """
     file_paths = _collect_valid_file_paths(paths)
     for path in file_paths:
+        print('Process file: {}'.format(path))
         with open_data_file(path) as data_reader:
-            yield from data_reader.read_series(only_headers=only_headers)
+            yield from data_reader.read_series(only_headers=only_headers,
+                                               series_filter=series_filter)
 
 
 def _collect_valid_file_paths(paths):
@@ -515,6 +529,70 @@ def open_data_file(path, mode='r'):
                 with open(working_path, 'w') as data_file:
                     archive_file.write(gzip.compress(data_file))
             os.remove(working_path)
+
+
+class ParameterFilter:
+    """
+    Filter to separate series with different parameters during reading.
+    This may decrease computational costs because only necessary series will be read.
+
+    Initialize filter valid parameters and use check_parameters method.
+    The filter could also be improved to reject invalid parameters, but for now such
+    functionality is redundant.
+    """
+    def __init__(self, valid_parameters):
+        """
+        Initialize filter. Arguments are represented as dictionary with keys as
+        parameters names. Values could be list, tuple or single entity.
+
+        If raw parameter is given, its name must match RAW_PARAMETERS_CODES.
+        If refined parameter is given, its must match Parameters.REFINED_PARAMETERS.
+
+        Parameters
+        ----------
+        valid_parameters: dict
+            Parameters that should pass the filter.
+        """
+        self._valid_parameters = {}
+        for key, value in valid_parameters.items():
+            if key in RAW_PARAMETERS_CODES or key in Parameters.REFINED_PARAMETERS:
+                if not isinstance(value, (list, tuple)):
+                    self._valid_parameters[key] = [value]
+                else:
+                    self._valid_parameters[key] = value
+            else:
+                raise ValueError('Incorrect parameter name: {}'.format(key))
+
+    def test_parameters(self, parameters):
+        """
+        Check if given parameters pass the filter.
+
+        Parameters
+        ----------
+        parameters: Parameters
+            Refined parameters of signal series.
+        Returns
+        -------
+        valid: bool
+        """
+        # Check if given parameters match filter valid parameters
+        for key, values in self._valid_parameters.items():
+            if hasattr(parameters, key):
+                test_value = getattr(parameters, key)
+            elif key in parameters.rest_raw_parameters:
+                test_value = parameters.rest_raw_parameters[key]
+            else:
+                return False
+
+            for val in values:
+                # If some of the parameters correspond to val
+                if test_value == val:
+                    break
+            else:
+                # If there is no match between parameters and values
+                return False
+
+        return True
 
 
 def _check_raw_parameters(raw_parameters):

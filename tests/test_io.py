@@ -21,10 +21,12 @@ def teardown():
 
 
 TEST_FILE_NAME = 'test_iisr_file.ISE'
+DEFAULT_DATETIME = datetime(2015, 6, 7, 10, 55, 37, 437000)
 
 
 @contextlib.contextmanager
-def make_test_file(n_unique_series=2, n_time_marks=2):
+def make_random_test_file(n_unique_series=2, n_time_marks=2):
+    """Create test_file with random series"""
     file_path = TEST_FILE_NAME
 
     def gen_unique_parameters():
@@ -37,19 +39,17 @@ def make_test_file(n_unique_series=2, n_time_marks=2):
         phase_code = [0, 5]
         random.shuffle(phase_code)
         for freq, ch, length, code in it.product(freqs, channels, pulse_len, phase_code):
-            pulse_type = CHANNELS_NUMBER_INFO[ch]['type']
             yield get_test_parameters(freq=freq, channel=ch, pulse_len=length,
-                                      phase_code=code, pulse_type=pulse_type)
+                                      phase_code=code)
 
     generator = gen_unique_parameters()
     parameter_sets = []
     for i in range(n_unique_series):
         parameter_sets.append(generator.__next__())
 
-    default_datetime = datetime(2015, 6, 7, 10, 55, 37, 437000)
     series_list = []
     for i in range(n_time_marks):
-        time_mark = default_datetime + timedelta(milliseconds=41*i)
+        time_mark = DEFAULT_DATETIME + timedelta(milliseconds=41 * i)
         for parameters in parameter_sets:
             n_samples = parameters.n_samples
             quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
@@ -71,7 +71,7 @@ class TestWriteRead(TestCase):
 
         # Create test parameters
         test_parameters = get_test_parameters()
-        time_mark = datetime(2015, 6, 7, 10, 55, 37, 437000)
+        time_mark = DEFAULT_DATETIME
         n_samples = test_parameters.n_samples
 
         test_quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
@@ -107,7 +107,7 @@ class TestWriteRead(TestCase):
 
 class TestRead(TestCase):
     def test_read(self):
-        with make_test_file() as (test_file_path, test_series):
+        with make_random_test_file() as (test_file_path, test_series):
             with io.open_data_file(test_file_path) as reader:
                 series = next(reader.read_series())
             self.assertIsInstance(series.time_mark, datetime)
@@ -116,7 +116,7 @@ class TestRead(TestCase):
             print(series)
 
     def test_read_by_series(self):
-        with make_test_file() as (test_file_path, test_series_list):
+        with make_random_test_file() as (test_file_path, test_series_list):
             output = io.read_files_by_series(test_file_path)
             for series, test_series in zip(output, test_series_list):
                 self.assertIsInstance(series, SignalTimeSeries)
@@ -127,13 +127,53 @@ class TestRead(TestCase):
                 np.testing.assert_array_equal(series.quadratures, test_series.quadratures)
 
     def test_read_by_blocks(self):
-        with make_test_file() as (test_file_path, test_series):
+        with make_random_test_file() as (test_file_path, test_series):
             output = io.read_files_by_packages(test_file_path)
             package = next(output)
             self.assertIsInstance(package, TimeSeriesPackage)
             for series in package:
                 self.assertIsInstance(series, SignalTimeSeries)
                 self.assertEqual(package.time_mark, series.time_mark)
+
+    def test_filtering(self):
+        # Create test file with various parameters
+        freqs = [155.5, 159.5]
+        channels = [0, 1, 2, 3]
+        pulse_lengths = [200, 700]
+        averages = [1, 2]
+
+        test_parameters = []
+        for fr, ch, len_, avg in it.product(freqs, channels, pulse_lengths, averages):
+            params = get_test_parameters(freq=fr, channel=ch, pulse_len=len_,
+                                         rest_raw_parameters={'average': avg})
+            test_parameters.append(params)
+
+        with io.open_data_file(TEST_FILE_NAME, 'w') as data_file:
+            for param in test_parameters:
+                n_samples = param.n_samples
+                test_quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
+                test_quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
+                test_quadratures = test_quad_i + 1j * test_quad_q
+
+                series = SignalTimeSeries(DEFAULT_DATETIME, param, test_quadratures)
+                data_file.write(series)
+
+        # Create filter
+        valid_params = {'frequency_MHz': 155.5, 'channel': [0, 2], 'average': 2,
+                        'pulse_length_us': 700}
+        filter_ = io.ParameterFilter(valid_parameters=valid_params)
+
+        # Check if filter correct
+        series_list = list(io.read_files_by_series(TEST_FILE_NAME, series_filter=filter_))
+        self.assertEqual(len(series_list), 2)
+        for series in series_list:
+            self.assertEqual(series.parameters.frequency_MHz,
+                             valid_params['frequency_MHz'])
+            self.assertIn(series.parameters.channel, valid_params['channel'])
+            self.assertEqual(series.parameters.pulse_length_us,
+                             valid_params['pulse_length_us'])
+            self.assertEqual(series.parameters.rest_raw_parameters['average'],
+                             valid_params['average'])
 
 
 class TestParametersTransformation(TestCase):
