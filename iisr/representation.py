@@ -14,8 +14,8 @@ class Parameters:
         'n_samples',
         'total_delay',
         'channel',
-        'frequency_MHz',
-        'pulse_length_us',
+        'frequency',
+        'pulse_length',
         'pulse_type',
         'phase_code'
     }
@@ -26,8 +26,8 @@ class Parameters:
         self.total_delay = None
 
         self.channel = None
-        self.frequency_MHz = None
-        self.pulse_length_us = None
+        self.frequency = None
+        self.pulse_length = None
         self.pulse_type = None
         self.phase_code = None
 
@@ -42,8 +42,8 @@ class Parameters:
             'Number of samples: {}'.format(self.n_samples),
             'Total delay: {} us'.format(self.total_delay),
             'Channel: {}'.format(self.channel),
-            'Frequency: {} MHz'.format(self.frequency_MHz),
-            'Pulse length: {} us'.format(self.pulse_length_us),
+            'Frequency: {} MHz'.format(self.frequency),
+            'Pulse length: {} us'.format(self.pulse_length),
             'Pulse type: {}'.format(self.pulse_type),
             'Phase code: {}'.format(self.phase_code),
             'Rest raw parameters:'
@@ -52,6 +52,24 @@ class Parameters:
         for k, v in self.rest_raw_parameters.items():
             msg.append('\t{}:  {}'.format(k, v))
         return '\n'.join(msg)
+
+    def match_refined(self, parameters):
+        """
+        Compare with another parameters to check if their refined parameters match.
+
+        Parameters
+        ----------
+        parameters: Parameters
+
+        Returns
+        -------
+        match: bool
+        """
+        for param_name in self.REFINED_PARAMETERS:
+            if getattr(self, param_name) != getattr(parameters, param_name):
+                return False
+        else:
+            return True
 
     def __eq__(self, other):
         return self.__dict__ == other.__dict__

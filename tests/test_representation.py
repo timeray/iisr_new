@@ -12,10 +12,10 @@ class TestParameters(TestCase):
         self.assertIsNotNone(test_params.sampling_frequency)
         self.assertIsNotNone(test_params.channel)
         self.assertIsNotNone(test_params.pulse_type)
-        self.assertIsNotNone(test_params.frequency_MHz)
+        self.assertIsNotNone(test_params.frequency)
         self.assertIsNotNone(test_params.total_delay)
         self.assertIsNotNone(test_params.phase_code)
-        self.assertIsNotNone(test_params.pulse_length_us)
+        self.assertIsNotNone(test_params.pulse_length)
         print(test_params)
 
     def test_equality(self):

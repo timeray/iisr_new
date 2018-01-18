@@ -41,9 +41,9 @@ def get_test_parameters(n_samples=2048, freq=155.5, pulse_len=700,
     """
     test_parameters = Parameters()
     test_parameters.n_samples = n_samples
-    test_parameters.frequency_MHz = freq
+    test_parameters.frequency = freq
     test_parameters.pulse_type = CHANNELS_NUMBER_INFO[channel]['type']
-    test_parameters.pulse_length_us = pulse_len
+    test_parameters.pulse_length = pulse_len
     test_parameters.sampling_frequency = sampling_freq
     test_parameters.channel = channel
     test_parameters.phase_code = phase_code

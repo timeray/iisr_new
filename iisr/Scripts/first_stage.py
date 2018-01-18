@@ -6,6 +6,7 @@ import os
 import argparse
 import configparser
 from iisr.preprocessing import LaunchConfig, run_processing
+from iisr import units
 
 DEFAULT_CONFIG_FILE = os.path.join('..', 'first_stage_config.ini')
 
@@ -18,13 +19,13 @@ config = configparser.ConfigParser()
 SEPARATOR = ','
 
 
-def parse_multi_value_option(option_string, option_type):
+def parse_options(option, option_type, *type_args):
     """
     Parse configuration option that should be None, list or single value.
 
     Parameters
     ----------
-    option_string: str
+    option: str
         String option to parse.
     option_type: type
         Type of option. Must accept str.
@@ -33,13 +34,13 @@ def parse_multi_value_option(option_string, option_type):
     -------
     value: None or list of given type
     """
-    if not option_string:
+    if not option:
         raise ValueError('Empty option string')
 
-    if option_string.lower() == 'none':
+    if option.lower() == 'none':
         return None
     else:
-        return [option_type(option) for option in option_string.split(SEPARATOR)]
+        return [option_type(option, *type_args) for option in option.split(SEPARATOR)]
 
 
 def main(argv=None):
@@ -69,13 +70,13 @@ def main(argv=None):
 
     # Create LaunchConfig instance and pass it to processing
     launch_config = LaunchConfig(
-        paths=parse_multi_value_option(config['Common']['paths'], str),
+        paths=parse_options(config['Common']['paths'], str),
         n_accumulation=int(config['Common']['n_accumulation']),
         mode=config['Common']['mode'],
-        channels=parse_multi_value_option(config['Common']['channels'], int),
-        frequencies=parse_multi_value_option(config['Common']['frequencies'], float),
-        pulse_length_us=parse_multi_value_option(config['Common']['pulse_length'], int),
-        phase_code=parse_multi_value_option(config['Common']['phase_code'], int),
+        channels=parse_options(config['Common']['channels'], int),
+        frequencies=parse_options(config['Common']['frequencies'], units.Frequency, 'MHz'),
+        pulse_length=parse_options(config['Common']['pulse_length'], units.Time, 'us'),
+        phase_code=parse_options(config['Common']['phase_code'], int),
         accumulation_timeout=int(config['Common']['accumulation_timeout']),
     )
     run_processing(launch_config)

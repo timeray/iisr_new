@@ -1,5 +1,5 @@
 """
-Contain tools to read IISR data files, *.ISE and *.IST.
+Contain tools to read and write IISR data files, *.ISE and *.IST.
 Read and write experiment realizations - received quadratures with parameters.
 
 There are two representations for parameters of realizations. First is raw parameters,
@@ -23,6 +23,7 @@ from bitstring import ConstBitStream, ReadError
 
 from iisr.representation import TimeSeriesPackage, SignalTimeSeries, Parameters
 from iisr.representation import CHANNELS_NUMBER_INFO
+from iisr import units
 
 __all__ = ['DataFileReader', 'DataFileWriter', 'open_data_file',
            'read_files_by_series', 'read_files_by_packages',
@@ -407,7 +408,7 @@ def read_files_by_packages(paths, only_headers=False, series_filter=None):
 
     Yields
     -------
-    data_block: DataBlock
+    data_block: TimeSeriesPackage
         Block of realizations corresponding to the same time mark.
     """
     file_paths = _collect_valid_file_paths(paths)
@@ -466,16 +467,15 @@ def _collect_valid_file_paths(paths):
     files_paths = []
 
     def check_and_add_path(new_path):
-        extension = os.path.splitext(new_path)[-1].upper()
-        if extension in FILE_EXTENSIONS:
-            files_paths.append(new_path)
+        if new_path.upper().endswith(FILE_EXTENSIONS):
+            files_paths.append(os.path.abspath(new_path))
 
     for path in paths:
         if os.path.isfile(path):
             check_and_add_path(path)
         elif os.path.isdir(path):
             for file_in_dir in sorted(os.listdir(path)):
-                check_and_add_path(file_in_dir)
+                check_and_add_path(os.path.join(path, file_in_dir))
     return files_paths
 
 
@@ -505,7 +505,8 @@ def open_data_file(path, mode='r'):
 
     if compressed and reading:
         with tempfile.NamedTemporaryFile(delete=False) as file:
-            file.write(gzip.decompress(open(path, 'rb').read()))
+            with open(path, 'rb') as zipped_file:
+                file.write(gzip.decompress(zipped_file.read()))
             working_path = file.name
     elif compressed and writing:
         working_path = path.replace(archive_extension, '')
@@ -690,13 +691,13 @@ def raw2refined_parameters(raw_parameters, data_byte_length):
 
     # Form output
     parameters = Parameters()
-    parameters.sampling_frequency = sampling_frequency
-    parameters.pulse_length_us = pulse_length_us
+    parameters.sampling_frequency = units.Frequency(sampling_frequency, 'kHz')
+    parameters.pulse_length = units.Time(pulse_length_us, 'us')
     parameters.pulse_type = pulse_type
     parameters.n_samples = n_samples
     parameters.channel = channel
     parameters.phase_code = raw_parameters.pop('phase_code')
-    parameters.frequency_MHz = frequency_MHz
+    parameters.frequency = units.Frequency(frequency_MHz, 'MHz')
     parameters.total_delay = total_delay
 
     parameters.rest_raw_parameters = raw_parameters
@@ -744,7 +745,7 @@ def refined2raw_parameters(time_mark, refined_parameters, default_offset_st1=80,
         raw_parameters['offset_st1'] = default_offset_st1
 
     if pulse_type is 'long':
-        long_pulse_len = refined_parameters.pulse_length_us
+        long_pulse_len = refined_parameters.pulse_length
     else:
         long_pulse_len = 0
 
@@ -768,12 +769,12 @@ def refined2raw_parameters(time_mark, refined_parameters, default_offset_st1=80,
     raw_parameters['time_msec'] = time_mark.microsecond // 1000
 
     # Frequency
-    frequency_kHz = int(refined_parameters.frequency_MHz * 1000)
+    frequency_kHz = int(refined_parameters.frequency * 1000)
     fr_lo = frequency_kHz & 0xFFFF
     fr_hi = frequency_kHz >> 16
     raw_parameters['st1_{}_fr_lo'.format(pulse_type)] = fr_lo
     raw_parameters['st1_{}_fr_hi'.format(pulse_type)] = fr_hi
 
-    raw_parameters['st1_{}_len'.format(pulse_type)] = refined_parameters.pulse_length_us
+    raw_parameters['st1_{}_len'.format(pulse_type)] = refined_parameters.pulse_length
 
     return raw_parameters, data_byte_length

@@ -94,9 +94,9 @@ class TestWriteRead(TestCase):
 
         # Check test parameters against read parameters
         self.assertEqual(test_parameters.n_samples, series.parameters.n_samples)
-        self.assertEqual(test_parameters.frequency_MHz, series.parameters.frequency_MHz)
+        self.assertEqual(test_parameters.frequency, series.parameters.frequency_MHz)
         self.assertEqual(test_parameters.pulse_type, series.parameters.pulse_type)
-        self.assertEqual(test_parameters.pulse_length_us,
+        self.assertEqual(test_parameters.pulse_length,
                          series.parameters.pulse_length_us)
         self.assertEqual(test_parameters.sampling_frequency,
                          series.parameters.sampling_frequency)
