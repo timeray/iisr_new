@@ -16,13 +16,14 @@ import gzip
 import itertools as it
 import os
 import tempfile
+import struct
 from datetime import datetime, timedelta
+from typing import Optional
 
 import numpy as np
-from bitstring import ConstBitStream, ReadError
 
 from iisr.representation import TimeSeriesPackage, SignalTimeSeries, Parameters
-from iisr.representation import CHANNELS_NUMBER_INFO
+from iisr.representation import CHANNELS_INFO
 from iisr import units
 
 __all__ = ['DataFileReader', 'DataFileWriter', 'open_data_file',
@@ -33,6 +34,7 @@ DELAY_FORMULA_CONSTANT = -960 - 50
 KEYWORD = b'ORDA'
 BYTEORDER = 'little'
 HEADER_CODES = {'super': 1, 'data': 2, 'global': 3}
+# Index corresponds to a code
 RAW_PARAMETERS_CODES = (
     'reserved',
     'mode',             # mode
@@ -74,39 +76,41 @@ RAW_PARAMETERS_CODES = (
 )
 
 
+class ReadError(RuntimeError):
+    pass
+
+
 class DataFileReader:
-    def __init__(self, stream, file_path='', series_filter=None):
+    """Read binary data stream."""
+    def __init__(self, stream, file_path: Optional[str] = '', only_headers: Optional[bool] = False,
+                 series_filter: Optional[ParameterFilter] = None):
+        """Create reader instance.
+
+        Args:
+            stream: Input data stream.
+            file_path: Path to file. Defaults to empty string.
+            only_headers: If True return only annotation of time series,
+                leaving quadratures field of SignalTimeSeries instance as None. Defaults to False.
+            series_filter: Filter for options. Defaults to None.
+        """
         self.stream = stream
-        self.only_headers = False
+        self.only_headers = only_headers
         self.file_path = file_path
         self._series = self._series_generator()
         self.filter = series_filter
 
-    def read_series(self, only_headers=False, series_filter=None):
-        self.only_headers = only_headers
-        self.filter = series_filter
+    def read_series(self):
         yield from self._series
 
-    def read_blocks(self, only_headers=False, series_filter=None):
+    def read_blocks(self):
         """
         Return signal blocks - groups of signal series that belong to identical time.
-
-        Parameters
-        ----------
-        only_headers: bool, default False
-            If True return only annotation of time series, leaving quadratures field of
-            SignalTimeSeries instance as None.
-        series_filter: ParameterFilter, default None
-            Filter for certain parameters.
 
         Yields
         -------
         signal_block: SignalBlock
             Block of realizations corresponding to the same time mark.
         """
-        self.only_headers = only_headers
-        self.filter = series_filter
-
         def grouping_condition(series):
             return series.time_mark
 
@@ -118,47 +122,47 @@ class DataFileReader:
         return self._series
 
     def _series_generator(self):
-        """
-        Read headers of iisr datafiles.
+        """Read headers of iisr datafiles.
 
-        Yields
-        -------
-        time_series: SignalTimeSeries
+        Yields:
+            time_series: SignalTimeSeries
         """
         # Read blocks until file ends.
         # Headers of blocks contain header code and block length.
-        # Wait for global block. It must be first
-        while True:
-            header_code, block_length = self._read_header()
-            if header_code == HEADER_CODES['global']:
-                global_parameters = self._read_raw_parameters_block(block_length)
-                break
-            elif header_code is None:
-                raise ReadError(
-                    'Global header not found in file {}.'.format(self.file_path))
-            else:
-                # Skip
-                pass
+        # Read global header block
+        header_code, block_length = self._read_header()
+        if header_code == HEADER_CODES['global']:
+            global_parameters = self._read_raw_parameters_block(block_length)
+        # Empty file does not raise error
+        elif header_code is None:
+            return
+        else:
+            raise ReadError(
+                'Global header is not at the first position of file {} '
+                '(get code {} instead of {})'
+                ''.format(self.file_path, header_code, HEADER_CODES['global'])
+            )
 
         # Reading remaining data
         while True:
-            # Read super block, the data annotation
+            # Read super block, annotation of data
             header_code, block_length = self._read_header()
             if header_code == HEADER_CODES['super']:
                 super_parameters = self._read_raw_parameters_block(block_length)
+            # End of file
             elif header_code is None:
                 break
             else:
                 raise ReadError(
-                    'Incorrect code [{}] in file {} (super code {} expected)'
+                    'Incorrect code [{}] in file {} (superheader code {} expected)'
                     ''.format(header_code, self.file_path, HEADER_CODES['super']))
 
             # Read data block. It must come after each super header
-            header_code, block_length = self._read_header()
+            header_code, data_length = self._read_header()
 
             if header_code == HEADER_CODES['data']:
                 data_address = self.stream.tell()
-                data_length = block_length
+            # End of file
             elif header_code is None:
                 break
             else:
@@ -166,12 +170,12 @@ class DataFileReader:
                     'Incorrect code [{}] in file {} (data code {} expected)'
                     ''.format(header_code, self.file_path, HEADER_CODES['data']))
 
-            # Form refined parameters
+            # Form refined options
             raw_parameters = global_parameters.copy()
             raw_parameters.update(super_parameters)
             time_mark, parameters = raw2refined_parameters(raw_parameters, data_length)
 
-            # Check if parameters pass the filter
+            # Check if options pass the filter
             if self.filter is not None:
                 if not self.filter.test_parameters(parameters):
                     continue
@@ -184,6 +188,32 @@ class DataFileReader:
             # Create annotated signal time series (realization)
             time_series = SignalTimeSeries(time_mark, parameters, quadratures)
             yield time_series
+
+    def _read_header(self):
+        """
+        Read header from input data stream.
+
+        Returns
+        -------
+        code: int
+            Code of header.
+        block_length: int
+            Length of next block, bytes.
+        """
+        piece = self.stream.read(9)
+
+        if len(piece) != 9:
+            return None, None
+
+        piece = struct.unpack('<4sBI', piece)  # Keyword, code, block length
+
+        # If keyword was found
+        if piece[0] == KEYWORD:
+            return piece[1], piece[2]
+        else:
+            raise ReadError('Keyword {} was not found in sequence {}'
+                            ' at the position {} of the input stream'
+                            ''.format(KEYWORD.decode(), piece, self.stream.tell() - 9))
 
     def read_quadratures(self, data_address, data_byte_length):
         """
@@ -216,52 +246,9 @@ class DataFileReader:
         return np.array(quadratures['quad_I'][0]) + 1j * np.array(
             quadratures['quad_Q'][0])
 
-    def _read_header(self):
-        """
-        Search for keyword in data stream.
-
-        Returns
-        -------
-        code: int
-            Code of header.
-        block_length: int
-            Length of next block, bytes.
-        """
-        piece = self.stream.read(9)
-        key_index = piece.find(KEYWORD)
-
-        # If found in first position.
-        if key_index == 0:
-            code = piece[4]
-            block_length = int.from_bytes(piece[5:], byteorder=BYTEORDER)
-            return code, block_length
-
-        # If found, but not in first position, change position in stream
-        elif key_index > 0:
-            self.stream.seek(key_index + 4)
-
-        # Not found in given piece, launch fast stream search.
-        else:
-            # bitstring provide fast keyword search (not loading all stream in mem)
-            # position drop to 0 in stream when creating ConstBitStream
-            bytepos = self.stream.tell()
-            bitstring_stream = ConstBitStream(self.stream)
-            bitstring_stream.bytepos = bytepos
-            try:
-                bitstring_stream.readto(KEYWORD, bytealigned=True)
-            except ReadError:
-                return None, None
-
-            self.stream.seek(bitstring_stream.bytepos)
-
-        # Read after position was found
-        code = int.from_bytes(self.stream.read(1), byteorder=BYTEORDER)
-        block_length = int.from_bytes(self.stream.read(4), byteorder=BYTEORDER)
-        return code, block_length
-
     def _read_raw_parameters_block(self, block_length):
         """
-        Read raw parameters of time series from stream.
+        Read raw options of time series from stream.
 
         Parameters
         ----------
@@ -270,8 +257,8 @@ class DataFileReader:
 
         Returns
         -------
-        parameters: dict
-            Raw parameters of time series.
+        options: dict
+            Raw options of time series.
         """
         parameters = {}
 
@@ -335,7 +322,7 @@ class DataFileWriter:
 
     def _write_global_block(self, parameters):
         """
-        If given parameters comprises new global header, write it. Otherwise, do nothing.
+        If given options comprises new global header, write it. Otherwise, do nothing.
 
         Parameters
         ----------
@@ -404,7 +391,7 @@ def read_files_by_packages(paths, only_headers=False, series_filter=None):
     only_headers: bool, default False
         If True read only headers, not quadratures.
     series_filter: ParameterFilter, default None
-        Filter for certain parameters.
+        Filter for certain options.
 
     Yields
     -------
@@ -431,7 +418,7 @@ def read_files_by_series(paths, only_headers=False, series_filter=None):
     only_headers: bool, default False
         If True read only headers, not quadratures.
     series_filter: ParameterFilter, default None
-        Filter for certain parameters.
+        Filter for certain options.
 
     Yields
     -------
@@ -534,17 +521,17 @@ def open_data_file(path, mode='r'):
 
 class ParameterFilter:
     """
-    Filter to separate series with different parameters during reading.
+    Filter to separate series with different options during reading.
     This may decrease computational costs because only necessary series will be read.
 
-    Initialize filter valid parameters and use check_parameters method.
-    The filter could also be improved to reject invalid parameters, but for now such
+    Initialize filter valid options and use check_parameters method.
+    The filter could also be improved to reject invalid options, but for now such
     functionality is redundant.
     """
     def __init__(self, valid_parameters):
         """
         Initialize filter. Arguments are represented as dictionary with keys as
-        parameters names. Values could be list, tuple or single entity.
+        options names. Values could be list, tuple or single entity.
 
         If raw parameter is given, its name must match RAW_PARAMETERS_CODES.
         If refined parameter is given, its must match Parameters.REFINED_PARAMETERS.
@@ -566,17 +553,17 @@ class ParameterFilter:
 
     def test_parameters(self, parameters):
         """
-        Check if given parameters pass the filter.
+        Check if given options pass the filter.
 
         Parameters
         ----------
         parameters: Parameters
-            Refined parameters of signal series.
+            Refined options of signal series.
         Returns
         -------
         valid: bool
         """
-        # Check if given parameters match filter valid parameters
+        # Check if given options match filter valid options
         for key, values in self._valid_parameters.items():
             if hasattr(parameters, key):
                 test_value = getattr(parameters, key)
@@ -586,18 +573,18 @@ class ParameterFilter:
                 return False
 
             for val in values:
-                # If some of the parameters correspond to val
+                # If some of the options correspond to val
                 if test_value == val:
                     break
             else:
-                # If there is no match between parameters and values
+                # If there is no match between options and values
                 return False
 
         return True
 
 
 def _check_raw_parameters(raw_parameters):
-    """Check raw parameters for validness"""
+    """Check raw options for validness"""
     with_st1 = False
     with_st2 = False
     for key, value in raw_parameters.items():
@@ -611,18 +598,18 @@ def _check_raw_parameters(raw_parameters):
     elif with_st1 and with_st2:
         raise NotImplementedError('Non-zero st1 and st2 fields')
     elif not with_st1 and not with_st2:
-        raise RuntimeError('Raw parameters miss key parameters')
+        raise RuntimeError('Raw options miss key options')
 
 
 def raw2refined_parameters(raw_parameters, data_byte_length):
     """
-    Process raw parameters of IISR data files to get convenient parameters and time.
-    Consume parameters from raw_parameters to reduce memory usage.
+    Process raw options of IISR data files to get convenient options and time.
+    Consume options from raw_parameters to reduce memory usage.
 
     Parameters
     ----------
     raw_parameters: dict
-        Dictionary of parameters from raw files.
+        Dictionary of options from raw files.
     data_byte_length: int
         Length of corresponding data block in bytes.
 
@@ -642,7 +629,7 @@ def raw2refined_parameters(raw_parameters, data_byte_length):
     channel = raw_parameters.pop('channel')
     first_delay = raw_parameters.pop('first_delay')
     offset_st1 = raw_parameters.pop('offset_st1')
-    pulse_type = CHANNELS_NUMBER_INFO[channel]['type']
+    pulse_type = CHANNELS_INFO[channel]['type']
 
     fr_lo = raw_parameters.pop('st1_{}_fr_lo'.format(pulse_type))
     fr_hi = raw_parameters.pop('st1_{}_fr_hi'.format(pulse_type))
@@ -707,7 +694,7 @@ def raw2refined_parameters(raw_parameters, data_byte_length):
 def refined2raw_parameters(time_mark, refined_parameters, default_offset_st1=80,
                            decimation=2):
     """
-    Build raw parameters dictionary from refined parameters.
+    Build raw options dictionary from refined options.
 
     Parameters
     ----------
@@ -721,7 +708,7 @@ def refined2raw_parameters(time_mark, refined_parameters, default_offset_st1=80,
     Returns
     -------
     raw_parameters: dict
-        Dictionary of parameters from IISR data files.
+        Dictionary of options from IISR data files.
     data_byte_length: int
         Length of data block.
     """
@@ -757,7 +744,7 @@ def refined2raw_parameters(time_mark, refined_parameters, default_offset_st1=80,
     raw_parameters['channel'] = refined_parameters.channel
     raw_parameters['phase_code'] = refined_parameters.phase_code
 
-    # Time parameters
+    # Time options
     raw_parameters['date_year'] = time_mark.year
     month = time_mark.month
     day = time_mark.day

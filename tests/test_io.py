@@ -69,7 +69,7 @@ class TestWriteRead(TestCase):
     def test_write_read_reciprocity(self):
         test_file_path = TEST_FILE_NAME
 
-        # Create test parameters
+        # Create test options
         test_parameters = get_test_parameters()
         time_mark = DEFAULT_DATETIME
         n_samples = test_parameters.n_samples
@@ -92,7 +92,7 @@ class TestWriteRead(TestCase):
         self.assertEqual(test_quadratures.size, series.quadratures.size)
         np.testing.assert_equal(test_quadratures, series.quadratures)
 
-        # Check test parameters against read parameters
+        # Check test options against read options
         self.assertEqual(test_parameters.n_samples, series.parameters.n_samples)
         self.assertEqual(test_parameters.frequency, series.parameters.frequency_MHz)
         self.assertEqual(test_parameters.pulse_type, series.parameters.pulse_type)
@@ -136,7 +136,7 @@ class TestRead(TestCase):
                 self.assertEqual(package.time_mark, series.time_mark)
 
     def test_filtering(self):
-        # Create test file with various parameters
+        # Create test file with various options
         freqs = [155.5, 159.5]
         channels = [0, 1, 2, 3]
         pulse_lengths = [200, 700]
@@ -181,7 +181,7 @@ class TestParametersTransformation(TestCase):
         test_byte_length = 4096
         test_raw_parameters = get_test_raw_parameters()
 
-        # Need to copy parameters, because transformation change input dictionary
+        # Need to copy options, because transformation change input dictionary
         result = io.raw2refined_parameters(test_raw_parameters.copy(), test_byte_length)
         raw_parameters, byte_length = io.refined2raw_parameters(*result)
         self.assertEqual(test_byte_length, byte_length)

@@ -4,17 +4,19 @@ First-stage processing of iisr data.
 """
 import numpy as np
 
-from datetime import datetime, timedelta
-from iisr.representation import FirstStageResults
+from datetime import datetime, timedelta, date
+from iisr.representation import FirstStageResults, Parameters
+from iisr.data_manager import DataManager
 from iisr import io
 from collections import namedtuple, defaultdict
+from typing import List, Iterator
 
 
 class LaunchConfig:
     def __init__(self, paths, mode, n_accumulation, channels, frequencies=None,
                  pulse_length=None, phase_code=None, accumulation_timeout=60):
         """
-        Create launch configuration. Check input arguments for validness.
+        Create launch configuration. Check if input arguments are valid.
 
         Parameters
         ----------
@@ -96,9 +98,14 @@ class LaunchConfig:
         return '\n'.join(msg)
 
 
-def form_arrays_from_packages(packages, n_accumulation, timeout=timedelta(minutes=5)):
+def aggregate_packages(packages: Iterator[io.TimeSeriesPackage],
+                       n_accumulation: int,
+                       timeout: timedelta = timedelta(minutes=5),
+                       drop_timeout_series: bool = True):
     """
-    Sort series in packages by their parameters until their count reach n_accumulation.
+    Pack series by parameters until their count reaches n_accumulation. Check if difference between
+    two consecutive time marks exceeds timeout. If this situation occurs, already aggregated
+    series may be yielded or dropped depending on the flag.
 
     Parameters
     ----------
@@ -111,6 +118,10 @@ def form_arrays_from_packages(packages, n_accumulation, timeout=timedelta(minute
     -------
     dict
     """
+    for package in packages:
+        package.time_series_list
+
+
     unique_arrays = {}
     series_counter = defaultdict(lambda: {'time_marks': [], 'quadratures': []})
     for package in packages:
@@ -119,7 +130,7 @@ def form_arrays_from_packages(packages, n_accumulation, timeout=timedelta(minute
             previous_mark = counter['time_marks'][-1]
             series_timedelta = package.time_mark - previous_mark
             if series_timedelta > timeout:
-                del series_counter[series.parameters] ??? cannot delete during iteration
+                del series_counter[series.parameters]  # ??? cannot delete during iteration
                 continue
             elif series_timedelta < 0:
                 raise RuntimeError('Package time mark earlier than series')
@@ -141,7 +152,7 @@ def form_arrays_from_packages(packages, n_accumulation, timeout=timedelta(minute
             unique_arrays = {}
 
 
-def run_processing(config):
+def run_processing(config: LaunchConfig):
     """
     Launch processing given configuration.
 
@@ -156,7 +167,7 @@ def run_processing(config):
     print('Start processing')
     print(config)
 
-    # Filter realizations for each time step by channels, frequencies and other parameters
+    # Filter realizations for each time step by channels, frequencies and other options
     filter_parameters = {}
     if config.frequencies is not None:
         filter_parameters['frequency'] = config.frequencies
@@ -167,24 +178,27 @@ def run_processing(config):
     if config.phase_code is not None:
         filter_parameters['phase_code'] = config.phase_code
 
+    # Initialize handler based on options
+    handler = Handler()
+
     # Pick series
     series_filter = io.ParameterFilter(valid_parameters=filter_parameters)
     series_package_generator = io.read_files_by_packages(paths=config.paths,
                                                          series_filter=series_filter)
 
-    # Group series by parameters to form arrays of length equal to accumulation duration
-    print('Assume that series, corresponding to the same transmission times, always '
-          'come together, i.e. no such united series are oversampled compared to others.')
+    # Group series to form arrays of length equal to accumulation duration, check for timeouts
+    packed_data = aggregate_packages(series_package_generator,
+                                     config.n_accumulation,
+                                     timeout=config.accumulation_timeout)
 
-    # Gather series from each package
-    arrays = form_arrays_from_packages(series_package_generator, config.n_accumulation)
+    # Pass arrays to handler
+    results = handler.handle_batch(packed_data)
 
-    # Pass arrays to handlers
+    # After series expire gather results from handlers and save them
+    manager = DataManager()
 
-    # After series expire save results from handlers
-    parameters = None
-    data = None
-    results = FirstStageResults(parameters, data)
+    manager.save_first_stage_results(results)
+    print('Processing successful')
 
 
 class Handler:
@@ -192,36 +206,92 @@ class Handler:
     def online(self, value):
         """Online processing algorithm"""
 
-    def batch(self, array):
+    def handle_batch(self, series_batches) -> FirstStageResults:
         """Batch processing algorithm"""
 
-    def finish(self):
-        """Finish processing and return results"""
+    def calc_power(self, quadratures: np.ndarray, axis: int = 0) -> np.ndarray:
+        """Calculate signal power.
 
+        Args:
+            quadratures: array of complex numbers.
+            axis: Averaging axis. Defaults to 0.
 
-class PowerHandler(Handler):
-    def __init__(self):
-        self.power = []
-
-    def batch(self, array):
+        Returns:
+            power: array of floats.
         """
+        return (quadratures.real ** 2 + quadratures.imag ** 2).mean(axis=axis)
 
-        Parameters
-        ----------
-        array: np.ndarray
-            NxM array, where N is a number of samples, M is a number of pulses.
-        Returns
-        -------
-        average_power: int
+
+class ActiveResults:
+    def __init__(self, time_marks: List[datetime], parameters: Parameters,
+                 options: dict, power: np.ndarray, spectrum: np.ndarray):
+        self.time_marks = time_marks
+        self.parameters = parameters
+        self.options = options
+        self.power = power
+        self.spectrum = spectrum
+
+        # Calculate all involved dates
+        self.dates = sorted(set((date(dt.year, dt.month, dt.day) for dt in self.time_marks)))
+
+        # Gather set of experiment parameters and processing options
+        # that uniquely identify the results
+        self.results_specification = {
+            'parameters': parameters,
+            'options': options,
+        }
+
+    def save(self, path_to_dir: str, save_date: date = None):
+        """Save results to specific directory. If date was passed, save only results corresponding
+        to this date.
+
+        Args:
+            path_to_dir: Path to save directory.
+            save_date: Date to save.
         """
-        self.power.append((array.real ** 2 + array.imag ** 2).mean(axis=1))
+        # Save data for given date
+        if save_date is not None:
+            if save_date in self.dates:
+                with open(path_to_dir, 'w') as file:
+                    do the thing
+            else:
+                raise ValueError('Not results for given date {}'.format(save_date))
+        # Save data for all dates to single file
+        else:
+            pass
+
+
+class ActiveHandler(Handler):
+    def __init__(self, n_fft, h_step):
+        self.nfft = n_fft
+        self.h_step = h_step
+        self.time_marks = {}
+        self.power = {}
+        self.spectrum = {}
+
+    def handle_batch_(self, params: Parameters, time_marks: List[datetime], quadratures: np.ndarray):
+        """Process batch of quadratures corresponding to unique parameters..
+
+        Args:
+            params: Parameters for given quadratures.
+            time_marks: N-length list of datetimes.
+            quadratures: (N x M) array of complex numbers. N - number of samples to average.
+                M - number of samples from single pulse.
+        """
+        power = self.calc_power(quadratures)
+        self.power.append(power)
 
     def finish(self):
+        """Output results and free memory.
+
+        Returns: FirstStageResults
+
+        """
         return self.power
 
 
 class CrossCorrelationHandler(Handler):
-    def batch(self, array):
+    def handle_batch(self, array):
         """
 
         Parameters

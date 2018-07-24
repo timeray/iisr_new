@@ -1,11 +1,11 @@
 import numpy as np
-from iisr.representation import CHANNELS_NUMBER_INFO, Parameters, SignalTimeSeries
+from iisr.representation import CHANNELS_INFO, Parameters, SignalTimeSeries
 from datetime import datetime, timedelta
 
 
 def get_test_raw_parameters(freq=155000, stel='st1', channel=0, year=2015, month=6,
                             day=14, hour=5, minute=55, second=59, millisecond=850):
-    pulse_type = CHANNELS_NUMBER_INFO[channel]['type']
+    pulse_type = CHANNELS_INFO[channel]['type']
     test_raw_parameters = {
         'reserved': 0,
         'mode': 1,
@@ -37,12 +37,12 @@ def get_test_parameters(n_samples=2048, freq=155.5, pulse_len=700,
     """
     Returns
     -------
-    parameters: Parameters
+    options: Parameters
     """
     test_parameters = Parameters()
     test_parameters.n_samples = n_samples
     test_parameters.frequency = freq
-    test_parameters.pulse_type = CHANNELS_NUMBER_INFO[channel]['type']
+    test_parameters.pulse_type = CHANNELS_INFO[channel]['type']
     test_parameters.pulse_length = pulse_len
     test_parameters.sampling_frequency = sampling_freq
     test_parameters.channel = channel

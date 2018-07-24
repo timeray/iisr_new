@@ -1,12 +1,39 @@
 """
 Collect classes for IISR data representation.
 """
-__all__ = ['Parameters', 'SignalTimeSeries', 'TimeSeriesPackage', 'CHANNELS_NUMBER_INFO']
+__all__ = ['Parameters', 'SignalTimeSeries', 'TimeSeriesPackage', 'CHANNELS_INFO']
+
+from iisr.units import Frequency
+import json
+import os
+
+
+class SeriesParameters:
+    """Base class representing options of quadratures."""
+    def __init__(self, sampling_frequency: Frequency,
+                 n_samples: int,
+                 channel: int,
+                 frequency: Frequency):
+        self.sampling_frequency = sampling_frequency
+        self.n_samples = n_samples
+        self.channel = channel
+        self.frequency = frequency
+
+    def match(self, other_params: 'SeriesParameters'):
+        return NotImplemented
+
+
+class PassiveSeriesParameters(SeriesParameters):
+    """Parameters of quadratures for passive mode of operation."""
+
+
+class ActiveSeriesParameters(SeriesParameters):
+    """Parameters of quadratures for active mode of operation."""
 
 
 class Parameters:
     """
-    Class representing refined parameters.
+    Class representing refined options.
     Use REFINED_PARAMETERS to access main parameter names.
     """
     REFINED_PARAMETERS = {
@@ -46,7 +73,7 @@ class Parameters:
             'Pulse length: {} us'.format(self.pulse_length),
             'Pulse type: {}'.format(self.pulse_type),
             'Phase code: {}'.format(self.phase_code),
-            'Rest raw parameters:'
+            'Rest raw options:'
         ]
 
         for k, v in self.rest_raw_parameters.items():
@@ -55,7 +82,7 @@ class Parameters:
 
     def match_refined(self, parameters):
         """
-        Compare with another parameters to check if their refined parameters match.
+        Compare with another options to check if their refined options match.
 
         Parameters
         ----------
@@ -96,7 +123,7 @@ class SignalTimeSeries:
         if self.parameters.n_samples is not None:
             return self.parameters.n_samples
         else:
-            raise ValueError('parameters n_samples is not initialized')
+            raise ValueError('options n_samples is not initialized')
 
     def __str__(self):
         msg = [
@@ -138,7 +165,7 @@ class TimeSeriesPackage:
 
 
 # Channels 0, 2 for narrow band pulse, channels 1, 3 for wide band pulse
-CHANNELS_NUMBER_INFO = {
+CHANNELS_INFO = {
     0: {'type': 'long', 'horn': 'upper'},
     1: {'type': 'short', 'horn': 'upper'},
     2: {'type': 'long', 'horn': 'lower'},
@@ -148,17 +175,47 @@ CHANNELS_NUMBER_INFO = {
 
 class Results:
     """Processing results"""
-    def save(self, path_to_dir):
+    def save(self, path_to_dir: str):
         """Save results to directory."""
 
 
 class FirstStageResults(Results):
-    def __init__(self, parameters, data):
-        self.parameters = parameters
-        self.data = data
+    options_file = 'options.json'
 
-    def save(self, path):
-        pass
+    def __init__(self, options: dict, results: list):
+        self.options = options
+        self.results = results
+
+    def save(self, path_to_dir: str):
+        """Save results and options of processing to directory.
+
+        Args:
+            path_to_dir: Path to directory.
+        """
+        with open(os.path.join(path_to_dir, self.options_file), 'w') as file:
+            json.dump(self.options, file, indent=4)
+
+        for result in self.results:
+            result.save(path_to_dir)
+
+    @classmethod
+    def load(cls, path_to_dir: str):
+        """Load results from directory.
+
+        Args:
+            path_to_dir: Directory with first stage results.
+        """
+        with open(os.path.join(path_to_dir, cls.options_file)) as file:
+            options = json.load(file)
+
+        # Load all results
+        results = []
+        for filename in os.listdir(path_to_dir):
+            # Parse filenames and load corresponding results
+            if '.dat' in filename:
+                pass
+
+        return FirstStageResults(options, results)
 
 
 class SecondStageResults(Results):

@@ -43,7 +43,7 @@ class TestSignalTimeSeries(TestCase):
         expected_size = test_time_series.quadratures.size
         self.assertEqual(expected_size, test_time_series.size)
 
-        # uninitialized parameters
+        # uninitialized options
         empty_params = Parameters()
         series = SignalTimeSeries(datetime(2000, 1, 1), empty_params, None)
         with self.assertRaises(ValueError):

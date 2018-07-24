@@ -88,7 +88,7 @@ class DataManager:
         results: Results
         """
 
-    def save_first_stage_results(self, results):
+    def save_first_stage_results(self, results: FirstStageResults):
         """
         Save first stage processing results.
 
@@ -102,6 +102,13 @@ class DataManager:
             Unique identifier of results.
         """
         new_id = self.get_new_id()
+        for result in results.results:
+            mode = result.options.mode
+            for result_date in result.dates:
+                date_path = self.get_path(date=result_date)
+                mode_directory = self.mode_directories[mode]
+                path = os.path.join(date_path, mode_directory, new_id)
+                result.save(path, save_date=result_date)
 
     def save_second_stage_results(self, results):
         """
@@ -109,7 +116,7 @@ class DataManager:
 
         Parameters
         ----------
-        results
+        results: SecondStageResults
 
         Returns
         -------
