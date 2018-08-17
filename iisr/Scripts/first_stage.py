@@ -75,7 +75,7 @@ def main(argv=None):
         mode=config['Common']['mode'],
         channels=parse_options(config['Common']['channels'], int),
         frequencies=parse_options(config['Common']['frequencies'], units.Frequency, 'MHz'),
-        pulse_length=parse_options(config['Common']['pulse_length'], units.Time, 'us'),
+        pulse_length=parse_options(config['Common']['pulse_length'], units.TimeUnit, 'us'),
         phase_code=parse_options(config['Common']['phase_code'], int),
         accumulation_timeout=int(config['Common']['accumulation_timeout']),
     )
