@@ -4,10 +4,13 @@ Manages output files and results of processing.
 from iisr.representation import FirstStageResults, SecondStageResults
 import os
 import sys
+from pathlib import Path
 import configparser
+from datetime import date
+from iisr.utils import DATE_FMT
 
 
-DEFAULT_CONFIG = os.path.join('..', 'general_config.ini')
+DEFAULT_CONFIG = Path('..') / 'general_config.ini'
 
 
 class DataManager:
@@ -27,31 +30,29 @@ class DataManager:
         """
         config = configparser.ConfigParser()
         config.read(path_to_config)
-        self.main_folder = os.path.abspath(config['Common']['path_to_output_storage'])
+        self.main_folder = Path(config['Common']['path_to_output_storage']).resolve()
 
-        if not os.path.exists(self.main_folder):
-            os.mkdir(self.main_folder)
-        elif not os.path.isdir(self.main_folder):
+        if not self.main_folder.exists():
+            self.main_folder.mkdir()
+        elif not self.main_folder.is_dir():
             raise NotADirectoryError('{}'.format(self.main_folder))
 
-        self.first_stage_folder = os.path.join(self.main_folder,
-                                               self.FIRST_STAGE_FOLDER_NAME)
-        self.second_stage_folder = os.path.join(self.main_folder,
-                                                self.SECOND_STAGE_FOLDER_NAME)
-        self.id_registry_path = os.path.join(self.main_folder, self.ID_REGISTRY)
+        self.first_stage_folder = self.main_folder / self.FIRST_STAGE_FOLDER_NAME
+        self.second_stage_folder = self.main_folder / self.SECOND_STAGE_FOLDER_NAME
+        self.id_registry_path = self.main_folder / self.ID_REGISTRY
 
         if not os.path.exists(self.first_stage_folder):
-            os.mkdir(self.first_stage_folder)
+            self.first_stage_folder.mkdir()
 
         if not os.path.exists(self.second_stage_folder):
-            os.mkdir(self.second_stage_folder)
+            self.second_stage_folder.mkdir()
 
-        if os.path.exists(self.id_registry_path):
-            with open(self.id_registry_path) as id_file:
-                self.current_id = int(id_file.readlines()[-1].split(' ')[-1])
-        else:
-            self.current_id = ID(0)
-            self._write_new_id(self.current_id)
+        # if self.id_registry_path.exists():
+        #     with open(self.id_registry_path) as id_file:
+        #         self.current_id = int(id_file.readlines()[-1].split(' ')[-1])
+        # else:
+        #     self.current_id = ID(0)
+        #     self._write_new_id(self.current_id)
 
     def _write_new_id(self, new_id):
         """
@@ -64,9 +65,15 @@ class DataManager:
         if not isinstance(new_id, ID):
             raise ValueError('Incorrect ID: {}'.format(new_id))
 
-        with open(self.id_registry_path, 'w') as id_file:
+        with open(str(self.id_registry_path), 'w') as id_file:
             id_file.write('# Store global identifier. Do not delete or change.\n')
             id_file.write('CURRENT_ID = {}'.format(new_id))
+
+    def get_path(self, save_date: date = None) -> Path:
+        path = self.first_stage_folder
+        if save_date is not None:
+            path = path / save_date.strftime(DATE_FMT)
+        return path
 
     def get_new_id(self):
         """Return new unique ID"""
@@ -101,14 +108,14 @@ class DataManager:
         id: ID
             Unique identifier of results.
         """
-        new_id = self.get_new_id()
         for result in results.results:
-            mode = result.options.mode
+            params_str = result.parameters_short_name()
+
             for result_date in result.dates:
-                date_path = self.get_path(date=result_date)
-                mode_directory = self.mode_directories[mode]
-                path = os.path.join(date_path, mode_directory, new_id)
-                result.save(path, save_date=result_date)
+                date_path = self.get_path(save_date=result_date)
+                mode_directory = result.mode_name
+                path = date_path / mode_directory
+                result.save_txt(path, save_date=result_date)
 
     def save_second_stage_results(self, results):
         """
