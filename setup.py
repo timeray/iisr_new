@@ -13,7 +13,7 @@ config = {
     'packages': ['iisr'],
     'scripts': [],
     'name': 'iisr',
-    'install_requires': ['numpy', 'bitstring'],
+    'install_requires': ['numpy'],
 }
 
 setup(**config)
