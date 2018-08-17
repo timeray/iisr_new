@@ -83,7 +83,7 @@ class ReadError(RuntimeError):
 class DataFileReader:
     """Read binary data stream."""
     def __init__(self, stream, file_path: Optional[str] = '', only_headers: Optional[bool] = False,
-                 series_filter: Optional[ParameterFilter] = None):
+                 series_filter: Optional[dict] = None):
         """Create reader instance.
 
         Args:
@@ -679,7 +679,7 @@ def raw2refined_parameters(raw_parameters, data_byte_length):
     # Form output
     parameters = Parameters()
     parameters.sampling_frequency = units.Frequency(sampling_frequency, 'kHz')
-    parameters.pulse_length = units.Time(pulse_length_us, 'us')
+    parameters.pulse_length = units.TimeUnit(pulse_length_us, 'us')
     parameters.pulse_type = pulse_type
     parameters.n_samples = n_samples
     parameters.channel = channel

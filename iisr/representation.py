@@ -196,7 +196,7 @@ class FirstStageResults(Results):
             json.dump(self.options, file, indent=4)
 
         for result in self.results:
-            result.save(path_to_dir)
+            result.save_txt(path_to_dir)
 
     @classmethod
     def load(cls, path_to_dir: str):
