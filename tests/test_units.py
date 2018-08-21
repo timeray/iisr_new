@@ -42,6 +42,27 @@ class TestUnits(TestCase):
         np.testing.assert_almost_equal(freq_unit['MHz'], test_freq / 1000.)
         self.assertEqual(freq_unit.size, size)
 
+        # Array should be copied, so inplace operation on original should not affect Units object
+        test_freq *= 2
+        self.assertTrue((freq_unit['kHz'] != test_freq).all())
+
+    def test_iteration(self):
+        # Iteration over 1-size array raises error
+        with self.assertRaises(ValueError):
+            next(iter(units.Frequency(1, 'kHz')))
+
+        # It is supposed that iteration over array return Units objects with corresponding values
+        test_arr = np.arange(10, dtype=float)
+        freqs = units.Frequency(test_arr, 'kHz')
+        for i, freq in enumerate(freqs):
+            self.assertEqual(units.Frequency(test_arr[i], 'kHz'), freq)
+
+        # If original object was changed during iteration (e.g. when someone access another items),
+        # iteration should be over original array
+        for i, freq in enumerate(freqs):
+            self.assertEqual(units.Frequency(test_arr[i], 'kHz'), freq)
+            freqs.__getitem__('MHz')
+
     def test_comparison(self):
         freq1 = units.Frequency(1000, 'kHz')
         freq2 = units.Frequency(1000, 'kHz')
@@ -57,6 +78,14 @@ class TestUnits(TestCase):
 
         with self.assertRaises(TypeError):
             freq1 == t
+
+        # Array comparison is element-wise and binary mask is returned
+        test_arr = np.arange(5, dtype=float)
+        mask = np.array([1, 0, 1, 1, 0], dtype=bool)
+        dist = units.Distance(test_arr, 'm')
+        test_arr[mask] = 99  # original array should have been copied
+
+        np.testing.assert_almost_equal(mask, dist['m'] != test_arr)
 
     def test_registry(self):
         self.assertIn('Frequency', units._unit_types_registry)

@@ -18,6 +18,12 @@ def register_unit(cls):
 
 
 class Unit:
+    """
+    Provide types to store physical values.
+    Only transition between units and equality comparison is supported.
+    Since the class is used to only store units, arithmetic operations and array operations
+    are not allowed.
+    """
     available_units = {}
 
     def __init__(self, value, unit):
@@ -25,15 +31,15 @@ class Unit:
             raise KeyError(unit)
 
         if isinstance(value, np.ndarray):
-            value = value.copy()  # Copy for later in-place operations
-
-        self._value = value
-        self._cur_unit = unit
-
-        if isinstance(value, (int, float, complex)):
+            value = value.copy().squeeze()  # Copy for later in-place operations
+            self.size = value.size
+        elif isinstance(value, (int, float, complex)):
             self.size = 1
         else:
             self.size = len(value)
+
+        self._value = value
+        self._cur_unit = unit
 
     def __getitem__(self, unit: str) -> Union[float, np.ndarray]:
         """Return values in the given unit.
@@ -46,11 +52,24 @@ class Unit:
         Returns:
             values: Values in given units.
         """
+        if isinstance(unit, int):
+            raise ValueError("__getitem__ is used as index. Use __iter__ to iterate over values.")
+
         if self._cur_unit != unit:
             ratio = self.available_units[self._cur_unit] / self.available_units[unit]
             self._value *= ratio
             self._cur_unit = unit
         return self._value
+
+    def __iter__(self):
+        if self.size == 1:
+            raise ValueError('Cannot iterate over 1-sized {}'.format(self.__class__.__name__))
+        else:
+            # We need to fix units and values to the moment when iteration was called
+            units = self._cur_unit
+            values = self._value.copy()
+            for val in values:
+                yield self.__class__(val, units)
 
     def __str__(self):
         if self.size == 1 and isinstance(self._value, np.ndarray):
@@ -68,10 +87,7 @@ class Unit:
                 repr(other), self.__class__.__name__)
             )
         ratio = self.available_units[self._cur_unit] / other.available_units[other._cur_unit]
-        if self._value * ratio == other._value:
-            return True
-        else:
-            return False
+        return self._value * ratio == other._value
 
 
 @register_unit
