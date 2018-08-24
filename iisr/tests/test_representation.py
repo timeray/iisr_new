@@ -1,7 +1,7 @@
 from unittest import TestCase, main
 from iisr.representation import *
 from datetime import datetime, timedelta
-from . import tools
+from iisr.tests import tools
 
 
 class TestParameters(TestCase):
@@ -24,6 +24,11 @@ class TestParameters(TestCase):
         test_params3 = tools.get_test_parameters(channel=0)
         self.assertEqual(test_params1, test_params3)
         self.assertNotEqual(test_params1, test_params2)
+
+    def test_hashable(self):
+        test_params1 = tools.get_test_parameters()
+        test_params2 = tools.get_test_parameters()
+        self.assertEqual(hash(test_params1), hash(test_params2))
 
 
 class TestSignalTimeSeries(TestCase):

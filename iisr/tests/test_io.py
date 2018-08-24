@@ -1,15 +1,14 @@
+import contextlib
+import itertools as it
+import random
 from datetime import datetime, timedelta
 from unittest import TestCase, main
 
-import os
-import random
-import itertools as it
 import numpy as np
-import contextlib
 
 from iisr import io
 from iisr.representation import *
-from tests.tools import get_test_raw_parameters, get_test_parameters
+from iisr.tests.tools import get_test_raw_parameters, get_test_parameters
 
 
 def setup():

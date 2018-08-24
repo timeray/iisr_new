@@ -80,7 +80,10 @@ class Parameters:
             msg.append('\t{}:  {}'.format(k, v))
         return '\n'.join(msg)
 
-    def match_refined(self, parameters):
+    def __hash__(self):
+        return hash((getattr(self, name) for name in sorted(self.REFINED_PARAMETERS)))
+
+    def __eq__(self, parameters):
         """
         Compare with another options to check if their refined options match.
 
@@ -97,9 +100,6 @@ class Parameters:
                 return False
         else:
             return True
-
-    def __eq__(self, other):
-        return self.__dict__ == other.__dict__
 
 
 class SignalTimeSeries:
@@ -182,9 +182,9 @@ class Results:
 class FirstStageResults(Results):
     options_file = 'options.json'
 
-    def __init__(self, options: dict, results: list):
-        self.options = options
+    def __init__(self, results: list, options: dict = None):
         self.results = results
+        self.options = options
 
     def save(self, path_to_dir: str):
         """Save results and options of processing to directory.
@@ -215,7 +215,7 @@ class FirstStageResults(Results):
             if '.dat' in filename:
                 pass
 
-        return FirstStageResults(options, results)
+        return FirstStageResults(results, options)
 
 
 class SecondStageResults(Results):
