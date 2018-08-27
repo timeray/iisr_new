@@ -40,6 +40,7 @@ class Unit:
 
         self._value = value
         self._cur_unit = unit
+        self._ref_unit = sorted(self.available_units.keys())[0]
 
     def __getitem__(self, unit: str) -> Union[float, np.ndarray]:
         """Return values in the given unit.
@@ -88,6 +89,10 @@ class Unit:
             )
         ratio = self.available_units[self._cur_unit] / other.available_units[other._cur_unit]
         return self._value * ratio == other._value
+
+    def __hash__(self):
+        # Raise error if underlying value is a numpy array
+        return hash(self[self._ref_unit])
 
 
 @register_unit

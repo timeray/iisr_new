@@ -87,6 +87,12 @@ class TestUnits(TestCase):
 
         np.testing.assert_almost_equal(mask, dist['m'] != test_arr)
 
+    def test_hashing(self):
+        freq = units.Frequency(1000, 'kHz')
+        self.assertEqual(hash(freq), hash(freq))
+        self.assertEqual(hash(units.Frequency(1000, 'kHz')), hash(units.Frequency(1, 'MHz')))
+        self.assertNotEqual(hash(units.Frequency(1000, 'kHz')), hash(units.Frequency(10, 'MHz')))
+
     def test_registry(self):
         self.assertIn('Frequency', units._unit_types_registry)
         self.assertIs(units._unit_types_registry['Frequency'], units.Frequency)
