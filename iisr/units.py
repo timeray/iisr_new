@@ -30,16 +30,21 @@ class Unit:
         if unit not in self.available_units:
             raise KeyError(unit)
 
+        if isinstance(value, int):
+            value = float(value)
+
         if isinstance(value, np.ndarray):
+            value.dtype = np.float
+
             value = value.copy().squeeze()  # Copy for later in-place operations
             self.size = value.size
-        elif isinstance(value, (int, float, complex)):
+        elif isinstance(value, (float, complex)):
             self.size = 1
         else:
             self.size = len(value)
 
         self._value = value
-        self._cur_unit = unit
+        self._unit = unit
         self._ref_unit = sorted(self.available_units.keys())[0]
 
     def __getitem__(self, unit: str) -> Union[float, np.ndarray]:
@@ -56,38 +61,32 @@ class Unit:
         if isinstance(unit, int):
             raise ValueError("__getitem__ is used as index. Use __iter__ to iterate over values.")
 
-        if self._cur_unit != unit:
-            ratio = self.available_units[self._cur_unit] / self.available_units[unit]
-            self._value *= ratio
-            self._cur_unit = unit
-        return self._value
+        ratio = self.available_units[self._unit] / self.available_units[unit]
+        return ratio * self._value
 
     def __iter__(self):
         if self.size == 1:
             raise ValueError('Cannot iterate over 1-sized {}'.format(self.__class__.__name__))
         else:
-            # We need to fix units and values to the moment when iteration was called
-            units = self._cur_unit
-            values = self._value.copy()
-            for val in values:
-                yield self.__class__(val, units)
+            for val in self._value:
+                yield self.__class__(val, self._unit)
 
     def __str__(self):
         if self.size == 1 and isinstance(self._value, np.ndarray):
             value = self._value.item()
         else:
             value = self._value
-        return str(value) + ' ' + str(self._cur_unit)
+        return str(value) + ' ' + str(self._unit)
 
     def __repr__(self):
-        return '{}({}, {})'.format(self.__class__.__name__, repr(self._value), repr(self._cur_unit))
+        return '{}({}, {})'.format(self.__class__.__name__, repr(self._value), repr(self._unit))
 
     def __eq__(self, other: 'Unit'):
         if self.__class__.__name__ != other.__class__.__name__:
             raise TypeError('Wrong unit {} (expected {})'.format(
                 repr(other), self.__class__.__name__)
             )
-        ratio = self.available_units[self._cur_unit] / other.available_units[other._cur_unit]
+        ratio = self.available_units[self._unit] / other.available_units[other._unit]
         return self._value * ratio == other._value
 
     def __hash__(self):

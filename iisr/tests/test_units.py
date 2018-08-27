@@ -46,6 +46,20 @@ class TestUnits(TestCase):
         test_freq *= 2
         self.assertTrue((freq_unit['kHz'] != test_freq).all())
 
+        # Check floating point issue
+        freq = units.TimeUnit(700, 'us')
+        val1 = freq['ms']
+        freq['us']
+        val2 = freq['ms']
+        self.assertEqual(val1, val2)
+
+        # Same for arrays
+        freq = units.TimeUnit(np.array([700, 900]), 'us')
+        val1 = freq['ms']
+        freq['us']
+        val2 = freq['ms']
+        np.testing.assert_equal(val1, val2)
+
     def test_iteration(self):
         # Iteration over 1-size array raises error
         with self.assertRaises(ValueError):
