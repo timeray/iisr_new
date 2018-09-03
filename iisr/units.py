@@ -124,7 +124,7 @@ class UnitsJSONEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-class UnitJSONDecoder(json.JSONDecoder):
+class UnitsJSONDecoder(json.JSONDecoder):
     def __init__(self, *args, **kwargs):
         json.JSONDecoder.__init__(self, object_hook=self.object_hook, *args, **kwargs)
 

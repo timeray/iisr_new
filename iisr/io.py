@@ -22,7 +22,7 @@ from typing import Optional
 
 import numpy as np
 
-from iisr.representation import TimeSeriesPackage, SignalTimeSeries, Parameters
+from iisr.representation import TimeSeriesPackage, SignalTimeSeries, SeriesParameters
 from iisr.representation import CHANNELS_INFO
 from iisr import units
 
@@ -543,7 +543,7 @@ class ParameterFilter:
         """
         self._valid_parameters = {}
         for key, value in valid_parameters.items():
-            if key in RAW_PARAMETERS_CODES or key in Parameters.REFINED_PARAMETERS:
+            if key in RAW_PARAMETERS_CODES or key in SeriesParameters.REFINED_PARAMETERS:
                 if not isinstance(value, (list, tuple)):
                     self._valid_parameters[key] = [value]
                 else:
@@ -557,7 +557,7 @@ class ParameterFilter:
 
         Parameters
         ----------
-        parameters: Parameters
+        parameters: SeriesParameters
             Refined options of signal series.
         Returns
         -------
@@ -617,7 +617,7 @@ def raw2refined_parameters(raw_parameters, data_byte_length):
     -------
     time_mark: datetime
         Time of observation.
-    refined_parameters: Parameters
+    refined_parameters: SeriesParameters
         Parameters of experiment.
     """
     _check_raw_parameters(raw_parameters)
@@ -677,7 +677,7 @@ def raw2refined_parameters(raw_parameters, data_byte_length):
     ) + residual_time
 
     # Form output
-    parameters = Parameters()
+    parameters = SeriesParameters(,
     parameters.sampling_frequency = units.Frequency(sampling_frequency, 'kHz')
     parameters.pulse_length = units.TimeUnit(pulse_length_us, 'us')
     parameters.pulse_type = pulse_type
@@ -699,7 +699,7 @@ def refined2raw_parameters(time_mark, refined_parameters, default_offset_st1=80,
     Parameters
     ----------
     time_mark: datetime
-    refined_parameters: Parameters
+    refined_parameters: SeriesParameters
     default_offset_st1: int
         Default value of receiver offset. Applied if offset is not in refined_parameters.
     decimation: int

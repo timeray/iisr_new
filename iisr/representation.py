@@ -1,37 +1,19 @@
 """
 Collect classes for IISR data representation.
 """
-__all__ = ['Parameters', 'SignalTimeSeries', 'TimeSeriesPackage', 'CHANNELS_INFO']
+__all__ = ['SeriesParameters', 'SignalTimeSeries', 'TimeSeriesPackage', 'CHANNELS_INFO']
 
-from iisr.units import Frequency
+from iisr.units import UnitsJSONDecoder, UnitsJSONEncoder
+from collections import namedtuple
 import json
 import os
 
 
+ExperimentGlobalParameters = namedtuple('ExperimentGlobalParameters',
+                                        ['sampling_frequency', 'n_samples', 'total_delay'])
+
+
 class SeriesParameters:
-    """Base class representing options of quadratures."""
-    def __init__(self, sampling_frequency: Frequency,
-                 n_samples: int,
-                 channel: int,
-                 frequency: Frequency):
-        self.sampling_frequency = sampling_frequency
-        self.n_samples = n_samples
-        self.channel = channel
-        self.frequency = frequency
-
-    def match(self, other_params: 'SeriesParameters'):
-        return NotImplemented
-
-
-class PassiveSeriesParameters(SeriesParameters):
-    """Parameters of quadratures for passive mode of operation."""
-
-
-class ActiveSeriesParameters(SeriesParameters):
-    """Parameters of quadratures for active mode of operation."""
-
-
-class Parameters:
     """
     Class representing refined options.
     Use REFINED_PARAMETERS to access main parameter names.
@@ -44,44 +26,52 @@ class Parameters:
         'frequency',
         'pulse_length',
         'pulse_type',
-        'phase_code'
+        'phase_code',
+        'antenna_end',
     }
 
-    def __init__(self):
-        self.sampling_frequency = None
-        self.n_samples = None
-        self.total_delay = None
+    @property
+    def sampling_frequency(self):
+        return self.global_parameters.sampling_frequency
 
-        self.channel = None
-        self.frequency = None
-        self.pulse_length = None
-        self.pulse_type = None
-        self.phase_code = None
+    @property
+    def n_samples(self):
+        return self.global_parameters.n_samples
 
-        assert set(self.__dict__.keys()) == self.REFINED_PARAMETERS
+    @property
+    def total_delay(self):
+        return self.global_parameters.total_delay
 
-        self.rest_raw_parameters = {}
+    def __init__(self, global_parameters, channel, frequency, pulse_length, phase_code, pulse_type,
+                 antenna_end=None):
+        self.global_parameters = global_parameters
+        self.channel = channel
+        self.frequency = frequency
+        self.pulse_length = pulse_length
+        self.phase_code = phase_code
+        self.pulse_type = pulse_type
+        self.antenna_end = antenna_end
+
+        self._hash = None
 
     def __str__(self):
         msg = [
             '==== Parameters ====',
-            'Sampling frequency: {} MHz'.format(self.sampling_frequency),
+            'Sampling frequency: {}'.format(self.sampling_frequency),
             'Number of samples: {}'.format(self.n_samples),
             'Total delay: {} us'.format(self.total_delay),
             'Channel: {}'.format(self.channel),
-            'Frequency: {} MHz'.format(self.frequency),
-            'Pulse length: {} us'.format(self.pulse_length),
+            'Frequency: {}'.format(self.frequency),
+            'Pulse length: {}'.format(self.pulse_length),
             'Pulse type: {}'.format(self.pulse_type),
             'Phase code: {}'.format(self.phase_code),
-            'Rest raw options:'
+            'Antenna end: {}'.format(self.antenna_end),
         ]
 
-        for k, v in self.rest_raw_parameters.items():
-            msg.append('\t{}:  {}'.format(k, v))
         return '\n'.join(msg)
 
     def __hash__(self):
-        return hash((getattr(self, name) for name in sorted(self.REFINED_PARAMETERS)))
+        return hash(tuple(getattr(self, name) for name in sorted(self.REFINED_PARAMETERS)))
 
     def __eq__(self, parameters):
         """
@@ -89,7 +79,7 @@ class Parameters:
 
         Parameters
         ----------
-        parameters: Parameters
+        parameters: SeriesParameters
 
         Returns
         -------
@@ -111,7 +101,7 @@ class SignalTimeSeries:
         Parameters
         ----------
         time_mark: datetime.datetime
-        parameters: Parameters
+        parameters: SeriesParameters
         quadratures: ndarray of complex numbers
         """
         self.time_mark = time_mark
@@ -164,13 +154,71 @@ class TimeSeriesPackage:
         return self.time_series_list.__iter__()
 
 
-# Channels 0, 2 for narrow band pulse, channels 1, 3 for wide band pulse
 CHANNELS_INFO = {
-    0: {'type': 'long', 'horn': 'upper'},
-    1: {'type': 'short', 'horn': 'upper'},
-    2: {'type': 'long', 'horn': 'lower'},
-    3: {'type': 'short', 'horn': 'lower'}
+    0: {'type': 'long', 'horn': 'upper', 'band_type': 'narrow'},
+    1: {'type': 'short', 'horn': 'upper', 'band_type': 'wide'},
+    2: {'type': 'long', 'horn': 'lower', 'band_type': 'narrow'},
+    3: {'type': 'short', 'horn': 'lower', 'band_type': 'wide'}
 }
+
+
+class Channel:
+    __slots__ = ['value', 'pulse_type', 'horn', 'band_type']
+
+    def __init__(self, value):
+        _valid_channels = [0, 1, 2, 3]
+        if value not in _valid_channels:
+            raise ValueError('Channel can be one of {}'.format(_valid_channels))
+        self.value = value
+        self.pulse_type = CHANNELS_INFO[value]['type']
+        self.horn = CHANNELS_INFO[value]['horn']
+        self.band_type = CHANNELS_INFO[value]['band_type']
+
+    def __hash__(self):
+        return hash(self.value)
+
+    def __eq__(self, other: 'Channel'):
+        if not isinstance(other, Channel):
+            raise TypeError('Types {} and {} are not comparable'.format(Channel, int))
+        return self.value == other.value
+
+    def __str__(self):
+        return str(self.value)
+
+    def __repr__(self):
+        return repr(self.value)
+
+    def __le__(self, other: 'Channel'):
+        return self.value.__le__(other.value)
+
+    def __lt__(self, other: 'Channel'):
+        return self.value.__lt__(other.value)
+
+    def __ge__(self, other: 'Channel'):
+        return self.value.__ge__(other.value)
+
+    def __gt__(self, other: 'Channel'):
+        return self.value.__gt__(other.value)
+
+
+CHANNELS = [Channel(0), Channel(1), Channel(2), Channel(3)]
+
+JSON_REPR_TYPE_STR = '_repr_type'
+
+
+class ReprJSONEncoder(UnitsJSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Channel):
+            return {JSON_REPR_TYPE_STR: Channel.__name__, 'value': obj.value}
+        return super().default(obj)
+
+
+class ReprJSONDecoder(UnitsJSONDecoder):
+    def object_hook(self, obj):
+        if JSON_REPR_TYPE_STR not in obj:
+            return super().object_hook(obj)
+
+        return Channel(obj['value'])
 
 
 class Results:
@@ -182,7 +230,7 @@ class Results:
 class FirstStageResults(Results):
     options_file = 'options.json'
 
-    def __init__(self, results: list, options: dict = None):
+    def __init__(self, results, options: dict = None):
         self.results = results
         self.options = options
 

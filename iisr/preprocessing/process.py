@@ -4,12 +4,13 @@ First-stage processing of IISR data.
 from collections import defaultdict
 from datetime import datetime, timedelta
 
+import logging
 import numpy as np
 from typing import Iterator
 
 from iisr import io
 from iisr.data_manager import DataManager
-from iisr.preprocessing.active import ActiveHandler
+from iisr.preprocessing.active import LongPulseActiveHandler, ShortPulseActiveHandler
 from iisr.representation import FirstStageResults
 
 
@@ -114,9 +115,9 @@ def aggregate_packages(packages: Iterator[io.TimeSeriesPackage],
         quads = np.array(quads, dtype=np.complex)  # [n_acc, quad_length]
         return marks, quads
 
-
     # List of unique quadratures: keys - parameters, values - (time_marks, quadratures)
     unique_list = defaultdict(list)
+    prev_time_mark = datetime.min  # Same for all tracked parameters
     for package in packages:
         for time_series in package.time_series_list:
             params = time_series.parameters
@@ -124,12 +125,11 @@ def aggregate_packages(packages: Iterator[io.TimeSeriesPackage],
 
             # Check for timeout
             if unique_list[params]:
-                prev_time_mark = unique_list[params][-1][0]
                 time_diff = time_series.time_mark - prev_time_mark
                 if time_diff > timeout:
                     if drop_timeout_series:
-                        # Just delete
-                        del unique_list[params]
+                        # Reset buffer (now all parameters are invalid)
+                        unique_list = defaultdict(list)
                     else:
                         # Yield what was accumulated
                         time_marks, quadratures = to_arrays(unique_list[params])
@@ -141,10 +141,13 @@ def aggregate_packages(packages: Iterator[io.TimeSeriesPackage],
                         ''.format(time_series.time_mark, prev_time_mark)
                     )
 
+            prev_time_mark = time_series.time_mark
+
             # Append new record. If full, yield and reset buffer.
             unique_list[params].append(new_record)
             if len(unique_list[params]) >= n_accumulation:
                 time_marks, quadratures = to_arrays(unique_list[params])
+                del unique_list[params]
                 yield params, time_marks, quadratures
 
 
@@ -160,8 +163,8 @@ def run_processing(config: LaunchConfig):
     -------
     results: FirstStageResults
     """
-    print('Start processing')
-    print(config)
+    logging.info('Start processing')
+    logging.info(config)
 
     # Filter realizations for each time step by channels, frequencies and other options
     filter_parameters = {}
@@ -176,7 +179,7 @@ def run_processing(config: LaunchConfig):
 
     # Initialize handlers based on options
     if config.mode == 'active':
-        handler = ActiveHandler()
+        handlers = [ShortPulseActiveHandler(), LongPulseActiveHandler()]
     elif config.mode == 'passive':
         raise NotImplementedError()
     else:
@@ -194,14 +197,15 @@ def run_processing(config: LaunchConfig):
 
     # Pass arrays to handler
     for params, time_marks, quadratures in accumulated_quadratures:
-        handler.process(params, time_marks, quadratures)
+        for handler in handlers:
+            if handler.validate(params):
+                handler.process(params, time_marks, quadratures)
 
-    results = FirstStageResults(config, handler.finish())
-
-    # After series expire gather results from handlers and save them
+    # Gather results from handlers and save them
     manager = DataManager()
-
-    manager.save_first_stage_results(results)
-    print('Processing successful')
+    for handler in handlers:
+        results = FirstStageResults(handler.finish())
+        manager.save_first_stage_results(results)
+    logging.info('Processing successful')
 
 

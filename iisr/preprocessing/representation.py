@@ -1,9 +1,10 @@
+from abc import abstractmethod, ABCMeta
 from datetime import date
 
 import numpy as np
 from typing import IO, List
 
-from iisr.representation import Parameters, FirstStageResults
+from iisr.representation import SeriesParameters
 
 
 class HandlerResult:
@@ -14,11 +15,31 @@ class HandlerResult:
         """Load results from list of files."""
 
 
-class Handler:
+class Handler(metaclass=ABCMeta):
     """Parent class for various types of first-stage processing."""
-    def process(self, params: Parameters, time_marks: np.ndarray,
-                quadratures: np.ndarray) -> FirstStageResults:
+    @abstractmethod
+    def process(self, params: SeriesParameters, time_marks: np.ndarray, quadratures: np.ndarray):
         """Processing algorithm"""
+
+    @abstractmethod
+    def validate(self, params):
+        """Check if parameters correspond to the handler.
+
+        Args:
+            params: Parameters to validate.
+
+        Returns:
+            valid: True if parameters match.
+        """
+        pass
+
+    @abstractmethod
+    def finish(self) -> HandlerResult:
+        """Returns results of processing and reset buffers.
+
+        Returns:
+            results: Processing results.
+        """
 
     def calc_power(self, q: np.ndarray, axis: int = 0) -> np.ndarray:
         """Calculate signal power.

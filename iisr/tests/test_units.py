@@ -117,7 +117,7 @@ class TestUnits(TestCase):
         test_freq = units.Frequency(1.5, 'kHz')
         freq = json.loads(
             json.dumps(test_freq, cls=units.UnitsJSONEncoder),
-            cls=units.UnitJSONDecoder,
+            cls=units.UnitsJSONDecoder,
         )
         self.assertEqual(freq, test_freq)
 
@@ -125,7 +125,7 @@ class TestUnits(TestCase):
         test_dist = units.Distance(1.5, 'km')
         dist = json.loads(
             json.dumps(test_dist, indent=True, cls=units.UnitsJSONEncoder),
-            cls=units.UnitJSONDecoder,
+            cls=units.UnitsJSONDecoder,
         )
         self.assertEqual(dist, test_dist)
 
@@ -138,7 +138,7 @@ class TestUnits(TestCase):
         arr_size1_time = units.TimeUnit(np.array([1.]), 's')
         decoded_time = json.loads(
             json.dumps(arr_size1_time, cls=units.UnitsJSONEncoder),
-            cls=units.UnitJSONDecoder
+            cls=units.UnitsJSONDecoder
         )
         self.assertEqual(arr_size1_time, decoded_time)
 

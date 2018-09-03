@@ -27,8 +27,17 @@ class TestParameters(TestCase):
 
     def test_hashable(self):
         test_params1 = tools.get_test_parameters()
-        test_params2 = tools.get_test_parameters()
+        test_params2 = tools.get_test_parameters(freq=155.7)
+        test_params3 = tools.get_test_parameters()
+        self.assertEqual(hash(test_params1), hash(test_params1))
+        self.assertNotEqual(hash(test_params1), hash(test_params2))
+        self.assertNotEqual(hash(test_params2), hash(test_params3))
+        self.assertEqual(hash(test_params1), hash(test_params3))
+
+        # Changing attribute changes hash
+        test_params1.frequency = 155.7
         self.assertEqual(hash(test_params1), hash(test_params2))
+        self.assertNotEqual(hash(test_params1), hash(test_params3))
 
 
 class TestSignalTimeSeries(TestCase):
@@ -47,12 +56,6 @@ class TestSignalTimeSeries(TestCase):
         test_time_series = tools.get_test_signal_time_series()
         expected_size = test_time_series.quadratures.size
         self.assertEqual(expected_size, test_time_series.size)
-
-        # uninitialized options
-        empty_params = Parameters()
-        series = SignalTimeSeries(datetime(2000, 1, 1), empty_params, None)
-        with self.assertRaises(ValueError):
-            print(series.size)
 
 
 class TestTimeSeriesPackage(TestCase):

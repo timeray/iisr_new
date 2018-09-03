@@ -110,7 +110,7 @@ class TestRead(TestCase):
             with io.open_data_file(test_file_path) as reader:
                 series = next(reader.read_series())
             self.assertIsInstance(series.time_mark, datetime)
-            self.assertIsInstance(series.parameters, Parameters)
+            self.assertIsInstance(series.parameters, SeriesParameters)
             self.assertIsInstance(series.quadratures, np.ndarray)
             print(series)
 
