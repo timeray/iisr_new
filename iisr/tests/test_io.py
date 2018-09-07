@@ -7,7 +7,6 @@ from unittest import TestCase, main
 import numpy as np
 
 from iisr import io
-from iisr.representation import *
 from iisr.tests.tools import get_test_raw_parameters, get_test_parameters
 
 
@@ -54,7 +53,7 @@ def make_random_test_file(n_unique_series=2, n_time_marks=2):
             quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
             quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
             quadratures = quad_i + 1j * quad_q
-            series = SignalTimeSeries(time_mark, parameters, quadratures)
+            series = io.SignalTimeSeries(time_mark, parameters, quadratures)
             series_list.append(series)
 
     with io.open_data_file(file_path, 'w') as writer:
@@ -77,7 +76,7 @@ class TestWriteRead(TestCase):
         test_quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
         test_quadratures = test_quad_i + 1j * test_quad_q
 
-        test_series = SignalTimeSeries(time_mark, test_parameters, test_quadratures)
+        test_series = io.SignalTimeSeries(time_mark, test_parameters, test_quadratures)
         with io.open_data_file(test_file_path, 'w') as writer:
             writer.write(test_series)
 
@@ -110,7 +109,7 @@ class TestRead(TestCase):
             with io.open_data_file(test_file_path) as reader:
                 series = next(reader.read_series())
             self.assertIsInstance(series.time_mark, datetime)
-            self.assertIsInstance(series.parameters, SeriesParameters)
+            self.assertIsInstance(series.parameters, io.SeriesParameters)
             self.assertIsInstance(series.quadratures, np.ndarray)
             print(series)
 
@@ -118,7 +117,7 @@ class TestRead(TestCase):
         with make_random_test_file() as (test_file_path, test_series_list):
             output = io.read_files_by_series(test_file_path)
             for series, test_series in zip(output, test_series_list):
-                self.assertIsInstance(series, SignalTimeSeries)
+                self.assertIsInstance(series, io.SignalTimeSeries)
                 self.assertEqual(series.time_mark, test_series.time_mark)
                 self.assertEqual(series.parameters.__dict__,
                                  test_series.parameters.__dict__)
@@ -129,9 +128,9 @@ class TestRead(TestCase):
         with make_random_test_file() as (test_file_path, test_series):
             output = io.read_files_by_packages(test_file_path)
             package = next(output)
-            self.assertIsInstance(package, TimeSeriesPackage)
+            self.assertIsInstance(package, io.TimeSeriesPackage)
             for series in package:
-                self.assertIsInstance(series, SignalTimeSeries)
+                self.assertIsInstance(series, io.SignalTimeSeries)
                 self.assertEqual(package.time_mark, series.time_mark)
 
     def test_filtering(self):
@@ -154,7 +153,7 @@ class TestRead(TestCase):
                 test_quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
                 test_quadratures = test_quad_i + 1j * test_quad_q
 
-                series = SignalTimeSeries(DEFAULT_DATETIME, param, test_quadratures)
+                series = io.SignalTimeSeries(DEFAULT_DATETIME, param, test_quadratures)
                 data_file.write(series)
 
         # Create filter

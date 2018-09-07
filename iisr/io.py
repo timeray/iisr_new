@@ -17,12 +17,12 @@ import itertools as it
 import os
 import tempfile
 import struct
+from collections import namedtuple
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, IO
 
 import numpy as np
 
-from iisr.representation import TimeSeriesPackage, SignalTimeSeries, SeriesParameters
 from iisr.representation import CHANNELS_INFO
 from iisr import units
 
@@ -76,13 +76,93 @@ RAW_PARAMETERS_CODES = (
 )
 
 
+class SeriesParameters:
+    """
+    Class representing refined options.
+    Use REFINED_PARAMETERS to access main parameter names.
+    """
+    REFINED_PARAMETERS = {
+        'sampling_frequency',
+        'n_samples',
+        'total_delay',
+        'channel',
+        'frequency',
+        'pulse_length',
+        'pulse_type',
+        'phase_code',
+        'antenna_end',
+    }
+
+    @property
+    def sampling_frequency(self):
+        return self.global_parameters.sampling_frequency
+
+    @property
+    def n_samples(self):
+        return self.global_parameters.n_samples
+
+    @property
+    def total_delay(self):
+        return self.global_parameters.total_delay
+
+    def __init__(self, global_parameters, channel, frequency, pulse_length, phase_code, pulse_type,
+                 antenna_end=None):
+        self.global_parameters = global_parameters
+        self.channel = channel
+        self.frequency = frequency
+        self.pulse_length = pulse_length
+        self.phase_code = phase_code
+        self.pulse_type = pulse_type
+        self.antenna_end = antenna_end
+
+        self._hash = None
+
+    def __str__(self):
+        msg = [
+            '==== Parameters ====',
+            'Sampling frequency: {}'.format(self.sampling_frequency),
+            'Number of samples: {}'.format(self.n_samples),
+            'Total delay: {} us'.format(self.total_delay),
+            'Channel: {}'.format(self.channel),
+            'Frequency: {}'.format(self.frequency),
+            'Pulse length: {}'.format(self.pulse_length),
+            'Pulse type: {}'.format(self.pulse_type),
+            'Phase code: {}'.format(self.phase_code),
+            'Antenna end: {}'.format(self.antenna_end),
+        ]
+
+        return '\n'.join(msg)
+
+    def __hash__(self):
+        return hash(tuple(getattr(self, name) for name in sorted(self.REFINED_PARAMETERS)))
+
+    def __eq__(self, parameters):
+        """
+        Compare with another options to check if their refined options match.
+
+        Parameters
+        ----------
+        parameters: SeriesParameters
+
+        Returns
+        -------
+        match: bool
+        """
+        for param_name in self.REFINED_PARAMETERS:
+            if getattr(self, param_name) != getattr(parameters, param_name):
+                return False
+        else:
+            return True
+
+
 class ReadError(RuntimeError):
     pass
 
 
 class DataFileReader:
     """Read binary data stream."""
-    def __init__(self, stream, file_path: Optional[str] = '', only_headers: Optional[bool] = False,
+    def __init__(self, stream: IO, file_path: Optional[str] = '',
+                 only_headers: Optional[bool] = False,
                  series_filter: Optional[dict] = None):
         """Create reader instance.
 
@@ -677,15 +757,19 @@ def raw2refined_parameters(raw_parameters, data_byte_length):
     ) + residual_time
 
     # Form output
-    parameters = SeriesParameters(,
-    parameters.sampling_frequency = units.Frequency(sampling_frequency, 'kHz')
-    parameters.pulse_length = units.TimeUnit(pulse_length_us, 'us')
-    parameters.pulse_type = pulse_type
-    parameters.n_samples = n_samples
-    parameters.channel = channel
-    parameters.phase_code = raw_parameters.pop('phase_code')
-    parameters.frequency = units.Frequency(frequency_MHz, 'MHz')
-    parameters.total_delay = total_delay
+    global_params = ExperimentGlobalParameters(
+        sampling_frequency=units.Frequency(sampling_frequency, 'kHz'),
+        n_samples=n_samples,
+        total_delay=total_delay,
+    )
+    parameters = SeriesParameters(
+        global_parameters=global_params,
+        channel=channel,
+        frequency=units.Frequency(frequency_MHz, 'MHz'),
+        pulse_length=units.TimeUnit(pulse_length_us, 'us'),
+        phase_code=raw_parameters.pop('phase_code'),
+        pulse_type=pulse_type,
+    )
 
     parameters.rest_raw_parameters = raw_parameters
     return time, parameters
@@ -765,3 +849,69 @@ def refined2raw_parameters(time_mark, refined_parameters, default_offset_st1=80,
     raw_parameters['st1_{}_len'.format(pulse_type)] = refined_parameters.pulse_length
 
     return raw_parameters, data_byte_length
+
+
+class SignalTimeSeries:
+    """
+    Time series of sampled received signal.
+    """
+    def __init__(self, time_mark, parameters, quadratures):
+        """
+        Parameters
+        ----------
+        time_mark: datetime.datetime
+        parameters: SeriesParameters
+        quadratures: ndarray of complex numbers
+        """
+        self.time_mark = time_mark
+        self.parameters = parameters
+        self.quadratures = quadratures
+
+    @property
+    def size(self):
+        if self.parameters.n_samples is not None:
+            return self.parameters.n_samples
+        else:
+            raise ValueError('options n_samples is not initialized')
+
+    def __str__(self):
+        msg = [
+            '======================',
+            '== Time series info ==',
+            '======================',
+            'Time mark: {}'.format(self.time_mark),
+            self.parameters.__str__(),
+            'Quadratures: {}'.format(self.quadratures)
+        ]
+        return '\n'.join(msg)
+
+
+class TimeSeriesPackage:
+    """
+    Stores signal time series that correspond to identical time, i.e. that originate from
+    the same pulse.
+    """
+    def __init__(self, time_mark, time_series_list):
+        """
+        Parameters
+        ----------
+        time_mark: datetime.datetime
+        time_series_list: list of SignalTimeSeries
+        """
+        for series in time_series_list:
+            if series.time_mark != time_mark:
+                raise ValueError('Given time series must have identical time_mark: '
+                                 '{} != {}'.format(series.time_mark, time_mark))
+
+        if not time_series_list:
+            raise ValueError('time series list is empty')
+
+        self.time_mark = time_mark
+        self.time_series_list = time_series_list
+
+    def __iter__(self):
+        return self.time_series_list.__iter__()
+
+
+ExperimentGlobalParameters = namedtuple('ExperimentGlobalParameters',
+                                        ['sampling_frequency', 'n_samples', 'total_delay'])

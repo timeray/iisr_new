@@ -8,10 +8,10 @@ import logging
 import numpy as np
 from typing import Iterator
 
+import iisr.io
 from iisr import io
 from iisr.data_manager import DataManager
 from iisr.preprocessing.active import LongPulseActiveHandler, ShortPulseActiveHandler
-from iisr.representation import FirstStageResults
 
 
 class LaunchConfig:
@@ -100,7 +100,7 @@ class LaunchConfig:
         return '\n'.join(msg)
 
 
-def aggregate_packages(packages: Iterator[io.TimeSeriesPackage],
+def aggregate_packages(packages: Iterator[iisr.io.TimeSeriesPackage],
                        n_accumulation: int,
                        timeout: timedelta = timedelta(minutes=5),
                        drop_timeout_series: bool = True):
@@ -204,8 +204,8 @@ def run_processing(config: LaunchConfig):
     # Gather results from handlers and save them
     manager = DataManager()
     for handler in handlers:
-        results = FirstStageResults(handler.finish())
-        manager.save_first_stage_results(results)
+        result = handler.finish()
+        manager.save_preprocessing_result(result)
     logging.info('Processing successful')
 
 

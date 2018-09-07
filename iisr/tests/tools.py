@@ -1,6 +1,6 @@
 import numpy as np
-from iisr.representation import CHANNELS_INFO, SeriesParameters, SignalTimeSeries
-from iisr.representation import ExperimentGlobalParameters
+from iisr.representation import CHANNELS_INFO
+from iisr.io import SeriesParameters, SignalTimeSeries, ExperimentGlobalParameters
 from datetime import datetime, timedelta
 
 

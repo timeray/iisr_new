@@ -2,14 +2,15 @@ import itertools as it
 import json
 import copy
 import warnings
-from collections import defaultdict, Counter
+from collections import defaultdict
 from datetime import datetime, date, timedelta
 
 import numpy as np
 from typing import List, TextIO, Dict, Sequence
 
+from iisr.representation import CHANNELS, Channel
 from iisr.preprocessing.representation import HandlerResult, Handler
-from iisr.representation import SeriesParameters, CHANNELS, ExperimentGlobalParameters, Channel
+from iisr.io import SeriesParameters, ExperimentGlobalParameters
 from iisr.representation import ReprJSONEncoder, ReprJSONDecoder
 from iisr.units import Frequency, TimeUnit, Distance
 from iisr.utils import TIME_FMT, DATE_FMT, central_time
@@ -204,6 +205,7 @@ def _parse_header(header: str, keys: List[str], types: List[type]) -> List:
 
 class ActiveResult(HandlerResult):
     quantity_headers = {'power': 'Power', 'coherence': 'Coherence'}
+    mode_name = 'active'
 
     def __init__(self, parameters: ActiveParameters,
                  time_marks: Sequence[datetime],
@@ -245,6 +247,12 @@ class ActiveResult(HandlerResult):
 
         # Calculate all involved dates
         self.dates = sorted(set((date(dt.year, dt.month, dt.day) for dt in self.time_marks)))
+
+    @property
+    def short_name(self) -> str:
+        return 'ch{}_freq{:.2f}_len{}'.format(self.channels,
+                                              self.frequency['MHz'],
+                                              self.pulse_length['us'])
 
     def __getattr__(self, item):
         if item in self.__dict__:

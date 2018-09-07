@@ -1,6 +1,7 @@
 from unittest import main, TestCase
 from iisr.preprocessing.active import *
-from iisr.representation import ExperimentGlobalParameters, SeriesParameters, Channel
+from iisr.representation import Channel
+from iisr.io import SeriesParameters, ExperimentGlobalParameters
 from iisr.units import Frequency, TimeUnit
 from datetime import datetime, timedelta
 from tempfile import NamedTemporaryFile
@@ -138,8 +139,8 @@ class TestActiveResult(TestCase):
         empty_results = ActiveResult(parameters=params, time_marks=[], power=None, coherence=None)
         self.assertEqual(params, empty_results.parameters)
         np.testing.assert_equal(empty_results.time_marks, np.array([], dtype=datetime))
-        self.assertEqual(empty_results.power, None)
-        self.assertEqual(empty_results.coherence, None)
+        self.assertIsNone(empty_results.power)
+        self.assertIsNone(empty_results.coherence)
 
 
 class TestNarrowbandActiveHander(TestCase):
@@ -191,7 +192,7 @@ class TestNarrowbandActiveHander(TestCase):
         self.assertEqual(results.parameters, test_params)
         self.assertEqual(len(results.time_marks), n_series)
 
-        self.assertNotEqual(results.power, None)
+        self.assertIsNotNone(results.power)
         self.assertEqual(len(results.power), len(channels))
 
         for ch in channels:
@@ -199,7 +200,7 @@ class TestNarrowbandActiveHander(TestCase):
             self.assertIsInstance(results.power[ch], np.ndarray)
             self.assertEqual(results.power[ch].shape, (n_series, n_samples))
 
-        self.assertNotEqual(results.coherence, None)
+        self.assertIsNotNone(results.coherence)
         self.assertIsInstance(results.coherence, np.ndarray)
         self.assertTrue(np.iscomplexobj(results.coherence))
         self.assertEqual(results.coherence.shape, (n_series, n_samples))
@@ -209,8 +210,8 @@ class TestNarrowbandActiveHander(TestCase):
         for i in range(n_series):
             handler.process(params[0], time_marks[i], quadratures[channels[0]][i])
         results = handler.finish()
-        self.assertEqual(results.coherence, None)
-        self.assertNotEqual(results.power, None)
+        self.assertIsNone(results.coherence)
+        self.assertIsNotNone(results.power)
 
         # Irregular operation: 1 channel, calculate power and coherence
         handler = LongPulseActiveHandler(eval_power=True, eval_coherence=True)

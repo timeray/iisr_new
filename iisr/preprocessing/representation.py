@@ -1,17 +1,27 @@
-from abc import abstractmethod, ABCMeta
+from abc import ABCMeta, abstractmethod, abstractclassmethod
 from datetime import date
 
 import numpy as np
 from typing import IO, List
 
-from iisr.representation import SeriesParameters
+from iisr.io import SeriesParameters
 
 
-class HandlerResult:
+class HandlerResult(metaclass=ABCMeta):
+    dates = NotImplemented  # type: List
+    mode_name = NotImplemented  # type: str
+
+    @property
+    @abstractmethod
+    def short_name(self) -> str:
+        pass
+
+    @abstractmethod
     def save_txt(self, file: IO, save_date: date = None):
         """Save results to file. If save_date is passed, save specific date."""
 
-    def load_txt(self, file: List[IO]):
+    @abstractclassmethod
+    def load_txt(self, file: List[IO]) -> 'HandlerResult':
         """Load results from list of files."""
 
 
@@ -41,7 +51,8 @@ class Handler(metaclass=ABCMeta):
             results: Processing results.
         """
 
-    def calc_power(self, q: np.ndarray, axis: int = 0) -> np.ndarray:
+    @staticmethod
+    def calc_power(q: np.ndarray, axis: int = 0) -> np.ndarray:
         """Calculate signal power.
 
         Args:
@@ -53,7 +64,8 @@ class Handler(metaclass=ABCMeta):
         """
         return (q.real ** 2 + q.imag ** 2).mean(axis=axis)
 
-    def calc_coherence(self, q1: np.ndarray, q2: np.ndarray, axis: int = 0) -> np.ndarray:
+    @staticmethod
+    def calc_coherence(q1: np.ndarray, q2: np.ndarray, axis: int = 0) -> np.ndarray:
         """Calculate coherence between two signals.
 
         Input array must have same shape.
