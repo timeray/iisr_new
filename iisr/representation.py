@@ -2,7 +2,7 @@
 Collect classes for IISR data representation.
 """
 
-__all__ = ['CHANNELS_INFO']
+__all__ = ['CHANNELS_INFO', 'Channel', 'ReprJSONDecoder', 'ReprJSONEncoder']
 
 from iisr.units import UnitsJSONDecoder, UnitsJSONEncoder
 
@@ -70,6 +70,9 @@ class ReprJSONDecoder(UnitsJSONDecoder):
         if JSON_REPR_TYPE_STR not in obj:
             return super().object_hook(obj)
 
-        return Channel(obj['value'])
+        if obj[JSON_REPR_TYPE_STR] == Channel.__name__:
+            return Channel(obj['value'])
+        else:
+            raise ValueError('Unexpected name {}'.format(obj[JSON_REPR_TYPE_STR]))
 
 
