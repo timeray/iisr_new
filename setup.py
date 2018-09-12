@@ -16,4 +16,4 @@ config = {
     'install_requires': ['numpy'],
 }
 
-setup(**config)
+setup(**config, install_requires=['numpy'])

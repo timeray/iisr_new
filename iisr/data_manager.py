@@ -1,6 +1,8 @@
 """
 Manages output files and results of processing.
 """
+from typing import IO
+
 from iisr.preprocessing.representation import HandlerResult
 import os
 import sys
@@ -31,8 +33,10 @@ class DataManager:
         Args:
             main_folder_path:
         """
+        # Main folder is created on demand
         self.main_folder = main_folder_path
 
+    def _check_main_folder(self):
         if not self.main_folder.exists():
             self.main_folder.mkdir()
         elif not self.main_folder.is_dir():
@@ -51,6 +55,8 @@ class DataManager:
         id: ID
             Unique identifier of results.
         """
+        self._check_main_folder()
+
         name = result.short_name
 
         for result_date in result.dates:
@@ -61,7 +67,7 @@ class DataManager:
             if not dirpath.exists():
                 dirpath.mkdir(parents=True)
 
-            with open(str(dirpath / filename), 'w') as file:
+            with open(str(dirpath / filename), 'w') as file:  # type: IO
                 result.save_txt(file, save_date=result_date)
 
     def save_postprocessing_results(self, results):
@@ -77,6 +83,7 @@ class DataManager:
         id: ID
             Unique identifier of results.
         """
+        self._check_main_folder()
 
     def print_folders(self, file=sys.stdout):
         """
