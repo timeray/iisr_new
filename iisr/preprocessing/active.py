@@ -10,7 +10,7 @@ from typing import List, TextIO, Dict, Sequence
 
 from iisr.representation import CHANNELS, Channel
 from iisr.preprocessing.representation import HandlerResult, Handler
-from iisr.io import SeriesParameters, ExperimentGlobalParameters
+from iisr.io import SeriesParameters, ExperimentParameters
 from iisr.representation import ReprJSONEncoder, ReprJSONDecoder
 from iisr.units import Frequency, TimeUnit, Distance
 from iisr.utils import TIME_FMT, DATE_FMT, central_time
@@ -68,7 +68,7 @@ class ActiveParameters(ResultParameters):
                       'frequency', 'pulse_length', 'phase_code']
     header_n_params_key = 'params_json_length'
 
-    def __init__(self, global_parameters: ExperimentGlobalParameters, channels: List[Channel],
+    def __init__(self, global_parameters: ExperimentParameters, channels: List[Channel],
                  pulse_type: str, frequency: Frequency, pulse_length: TimeUnit, phase_code: int):
         self.global_parameters = global_parameters
 
@@ -138,9 +138,9 @@ class ActiveParameters(ResultParameters):
 
         json_length = int(header.split()[1]) + 1  # 1 for last '\n'
         params = json.loads(file.read(json_length), cls=ReprJSONDecoder)
-        global_params = ExperimentGlobalParameters(params.pop('sampling_frequency'),
-                                                   params.pop('n_samples'),
-                                                   params.pop('total_delay'))
+        global_params = ExperimentParameters(params.pop('sampling_frequency'),
+                                             params.pop('n_samples'),
+                                             params.pop('total_delay'))
         return cls(global_params, **params)
 
 

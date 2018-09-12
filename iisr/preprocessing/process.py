@@ -186,9 +186,9 @@ def run_processing(config: LaunchConfig):
         raise ValueError('Unknown mode: {}'.format(config.mode))
 
     # Pick series
-    series_filter = io.ParameterFilter(valid_parameters=filter_parameters)
+    series_filter = io.ParameterSelector(valid_parameters=filter_parameters)
     series_package_generator = io.read_files_by_packages(paths=config.paths,
-                                                         series_filter=series_filter)
+                                                         series_selector=series_filter)
 
     # Group series to form arrays of length equal to accumulation duration, check for timeouts
     accumulated_quadratures = aggregate_packages(series_package_generator,

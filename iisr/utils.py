@@ -1,10 +1,10 @@
 """
 Useful methods.
 """
-import numpy as np
-from datetime import datetime, timedelta
-from typing import Sequence, Union
+from datetime import datetime
 
+import numpy as np
+from typing import Sequence
 
 DATE_FMT = '%Y-%m-%d'
 TIME_FMT = '%H:%M:%S'

@@ -1,7 +1,7 @@
 from unittest import main, TestCase
 from iisr.preprocessing.active import *
 from iisr.representation import Channel
-from iisr.io import SeriesParameters, ExperimentGlobalParameters
+from iisr.io import SeriesParameters, ExperimentParameters
 from iisr.units import Frequency, TimeUnit
 from datetime import datetime, timedelta
 from tempfile import NamedTemporaryFile
@@ -29,7 +29,7 @@ class TestCalcs(TestCase):
 
 def get_global_params(n_samples=2048, sampling_frequency=Frequency(1, 'MHz'),
                       total_delay=TimeUnit(3000, 'us')):
-    return ExperimentGlobalParameters(sampling_frequency, n_samples, total_delay)
+    return ExperimentParameters(sampling_frequency, n_samples, total_delay)
 
 
 def get_active_params(n_samples=2048):

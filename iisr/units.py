@@ -83,7 +83,7 @@ class Unit:
 
     def __eq__(self, other: 'Unit'):
         if self.__class__.__name__ != other.__class__.__name__:
-            raise TypeError('Wrong unit {} (expected {})'.format(
+            raise TypeError('Wrong type {} (expected {})'.format(
                 repr(other), self.__class__.__name__)
             )
         ratio = self.available_units[self._unit] / other.available_units[other._unit]
