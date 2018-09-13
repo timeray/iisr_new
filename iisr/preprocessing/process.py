@@ -186,7 +186,7 @@ def run_processing(config: LaunchConfig):
         raise ValueError('Unknown mode: {}'.format(config.mode))
 
     # Pick series
-    series_filter = io.ParameterSelector(valid_parameters=filter_parameters)
+    series_filter = io.SeriesSelector(valid_parameters=filter_parameters)
     series_package_generator = io.read_files_by_packages(paths=config.paths,
                                                          series_selector=series_filter)
 

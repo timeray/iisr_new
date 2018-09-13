@@ -3,7 +3,7 @@ import itertools as it
 import random
 import tempfile
 
-from typing import Dict, Tuple, Any
+from typing import Dict, Tuple, Any, List
 
 from iisr.representation import CHANNELS_INFO, Channel
 from iisr.units import Frequency, TimeUnit
@@ -76,24 +76,8 @@ def get_test_signal_time_series() -> io.SignalTimeSeries:
     return time_series
 
 
-def get_parameter_selector_setup():
-    freqs = [155.5, 159.5]
-    channels = [0, 1, 2, 3]
-    pulse_lengths = [200, 700]
-
-    test_parameters = []
-    for fr, ch, len_ in it.product(freqs, channels, pulse_lengths):
-        params = get_test_parameters(freq=fr, channel=ch, pulse_len=len_)
-        test_parameters.append(params)
-
-    some_valid_params = {'channels': [Channel(0)], 'pulse_types': ['long'],
-                         'frequencies': [Frequency(155.5, 'MHz')],
-                         'pulse_lengths': [TimeUnit(700, 'us')]}
-    return test_parameters, some_valid_params
-
-
 @contextlib.contextmanager
-def make_random_test_file(n_unique_series=2, n_time_marks=2):
+def make_random_test_file(n_unique_series=2, n_time_marks=2, time_step_sec=1):
     """Create test_file with random series"""
     def gen_unique_parameters():
         freqs = [154., 155.5, 156.8, 158., 159.5]
@@ -114,7 +98,7 @@ def make_random_test_file(n_unique_series=2, n_time_marks=2):
 
     series_list = []
     for i in range(n_time_marks):
-        time_mark = DEFAULT_DATETIME + timedelta(milliseconds=41 * i)
+        time_mark = DEFAULT_DATETIME + timedelta(seconds=time_step_sec * i)
         for parameters in parameter_sets:
             n_samples = parameters.n_samples
             quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
@@ -275,31 +259,66 @@ class TestParametersTransformation(TestCase):
             self.assertEqual(test_raw_parameters[code], raw_parameters[code])
 
 
-class TestParameterSelector(TestCase):
-    def test_selector(self):
-        # Trivial selector
-        filter_ = io.ParameterSelector()
-        self.assertTrue(filter_.are_valid({0: 0}))
+class TestSeriesSelector(TestCase):
+    def test(self):
+        trivial_filter = io.SeriesSelector()
 
-        # Valid raw parameters
-        test_parameters, valid_params \
-            = get_parameter_selector_setup()  # type: Tuple[Dict, Dict[str, Any]]
-        filter_ = io.ParameterSelector(**valid_params)
+        valid_params = {
+            'frequencies': [Frequency(155.5, 'MHz'), Frequency(159.5, 'MHz')],
+            'channels': [Channel(0), Channel(2)],
+            'pulse_lengths': [TimeUnit(200, 'us'), TimeUnit(700, 'us')],
+            'pulse_types': None,
+        }
+        specific_filter = io.SeriesSelector(**valid_params)
 
-        raw_parameters = get_test_raw_parameters(
-            freq=int(valid_params['frequencies'][0]['kHz']),
-            channel=valid_params['channels'][0].value,
-            pulse_len=int(valid_params['pulse_lengths'][0]['us'])
-        )
-        self.assertTrue(filter_.are_valid(raw_parameters))
+        for fr, ch, len_ in it.product([155500, 159500], [0, 2], [200, 700]):
+            raw_params = get_test_raw_parameters(freq=fr, pulse_len=len_, channel=ch)
+            self.assertTrue(trivial_filter.validate_parameters(raw_params))
+            self.assertTrue(specific_filter.validate_parameters(raw_params),
+                            'fr={}, ch={}, len_={}'.format(fr, ch, len_))
 
-        # Invalid raw parameters
-        raw_parameters = get_test_raw_parameters(
-            freq=42000,
-            channel=valid_params['channels'][0].value,
-            pulse_len=int(valid_params['pulse_lengths'][0]['us'])
-        )
-        self.assertFalse(filter_.are_valid(raw_parameters))
+        for fr, ch, len_ in it.product([154000, 159400], [1, 3], [900]):
+            raw_params = get_test_raw_parameters(freq=fr, pulse_len=len_, channel=ch)
+            self.assertTrue(trivial_filter.validate_parameters(raw_params))
+            self.assertFalse(specific_filter.validate_parameters(raw_params),
+                             'fr={}, ch={}, len_={}'.format(fr, ch, len_))
+
+        # Channel and type
+        valid_params = {
+            'channels': [Channel(0), Channel(1)],
+            'pulse_types': 'long',
+        }
+        specific_filter = io.SeriesSelector(**valid_params)
+        for fr, ch, len_ in it.product([155500, 159500], [0, 2], [200, 700]):
+            raw_params = get_test_raw_parameters(freq=fr, pulse_len=len_, channel=ch)
+
+            self.assertEqual(ch == 0, specific_filter.validate_parameters(raw_params),
+                             'fr={}, ch={}, len_={}'.format(fr, ch, len_))
+
+    def test_time_validation(self):
+        trivial_selector = io.SeriesSelector()
+        start_selector = io.SeriesSelector(start_time=datetime(2015, 6, 6))
+        stop_selector = io.SeriesSelector(stop_time=datetime(2015, 6, 8))
+        start_stop_selector = io.SeriesSelector(start_time=datetime(2015, 6, 6),
+                                                stop_time=datetime(2015, 6, 8))
+
+        dtime = datetime(2015, 1, 1)
+        self.assertTrue(trivial_selector.validate_time_mark(dtime))
+        self.assertFalse(start_selector.validate_time_mark(dtime))
+        self.assertTrue(stop_selector.validate_time_mark(dtime))
+        self.assertFalse(start_stop_selector.validate_time_mark(dtime))
+
+        dtime = datetime(2015, 6, 7)
+        self.assertTrue(trivial_selector.validate_time_mark(dtime))
+        self.assertTrue(start_selector.validate_time_mark(dtime))
+        self.assertTrue(stop_selector.validate_time_mark(dtime))
+        self.assertTrue(start_stop_selector.validate_time_mark(dtime))
+
+        dtime = datetime(2015, 8, 6)
+        self.assertTrue(trivial_selector.validate_time_mark(dtime))
+        self.assertTrue(start_selector.validate_time_mark(dtime))
+        self.assertFalse(stop_selector.validate_time_mark(dtime))
+        self.assertFalse(start_stop_selector.validate_time_mark(dtime))
 
 
 class TestRead(TestCase):
@@ -316,8 +335,17 @@ class TestRead(TestCase):
             np.testing.assert_almost_equal(series.quadratures, test_series_list[0].quadratures)
 
     def test_read_with_selector(self):
-        test_parameters, valid_params = get_parameter_selector_setup()
-        filter_ = io.ParameterSelector(**valid_params)
+        valid_params = {
+            'frequencies': [Frequency(155.5, 'MHz')],
+            'channels': [Channel(0), Channel(2)],
+            'pulse_lengths': [TimeUnit(200, 'us')],
+            'pulse_types': ['long'],
+        }
+        filter_ = io.SeriesSelector(**valid_params)
+
+        test_parameters = []
+        for fr, ch, len_ in it.product([155.5, 159.5], [0, 2], [200, 700]):
+            test_parameters.append(get_test_parameters(freq=fr, pulse_len=len_, channel=ch))
 
         with tempfile.TemporaryDirectory() as dirname:
             test_filepath = Path(dirname) / TEST_FILE_NAME
@@ -338,10 +366,10 @@ class TestRead(TestCase):
 
             self.assertEqual(len(series_list), 2)
             for series in series_list:
-                self.assertIn(series.parameters.frequency_MHz, valid_params['frequencies'])
+                self.assertEqual(series.parameters.frequency, valid_params['frequencies'][0])
                 self.assertIn(series.parameters.channel, valid_params['channels'])
-                self.assertIn(series.parameters.pulse_length, valid_params['pulse_lengths'])
-                self.assertIn(series.parameters.pulse_type, valid_params['pulse_types'])
+                self.assertEqual(series.parameters.pulse_length, valid_params['pulse_lengths'][0])
+                self.assertEqual(series.parameters.pulse_type, valid_params['pulse_types'][0])
 
 
 class TestWriteRead(TestCase):

@@ -22,7 +22,7 @@ from collections import namedtuple, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from typing import IO, Dict, Tuple, Iterable, List
+from typing import IO, Dict, Tuple, Iterable, List, Union
 
 import numpy as np
 
@@ -306,7 +306,7 @@ def _get_antenna_end(raw_parameters: Dict[str, int]) -> str:
         raise AssertionError()
 
 
-def _raw2refined_parameters(raw_parameters: Dict[int, int],
+def _raw2refined_parameters(raw_parameters: Dict[str, int],
                             data_byte_length: int,
                             file_info: FileInfo) -> Tuple[datetime, SeriesParameters]:
     """Process raw options of IISR data files to get convenient options and time.
@@ -370,16 +370,16 @@ def _raw2refined_parameters(raw_parameters: Dict[int, int],
     hour = hour_min & 0x00FF
 
     # It appears sometimes *.ISE files have millisecond >= 1000
-    residual_time = timedelta()
     if millisecond >= 1000:
-        delta = int(millisecond - 999)  # delta should be int
-        millisecond = 999
-        residual_time = timedelta(microseconds=delta * 1000)
-
-    time = datetime(
-        year=year, month=month, day=day, hour=hour, minute=minute,
-        second=second, microsecond=millisecond * 1000
-    ) + residual_time
+        time = datetime(
+            year=year, month=month, day=day, hour=hour, minute=minute,
+            second=second
+        ) + timedelta(microseconds=millisecond * 1000)
+    else:
+        time = datetime(
+            year=year, month=month, day=day, hour=hour, minute=minute,
+            second=second, microsecond=millisecond * 1000
+        )
 
     # Form output
     global_params = ExperimentParameters(
@@ -409,6 +409,23 @@ def _frequency2raw(frequency: Frequency) -> Tuple[int, int]:
     fr_lo = frequency & 0xFFFF
     fr_hi = frequency >> 16
     return fr_lo, fr_hi
+
+
+def _pulse_length2raw(pulse_length: TimeUnit) -> int:
+    return int(pulse_length['us'])
+
+
+RawDateTime = namedtuple('RawDateTime',
+                         ['date_year', 'date_mon_day', 'time_h_m', 'time_sec', 'time_msec'])
+
+
+def _datetime2raw(dtime: datetime) -> RawDateTime:
+    date_year = dtime.year
+    date_mon_day = (dtime.month << 8) + dtime.day
+    time_h_m = (dtime.minute << 8) + dtime.hour
+    time_sec = dtime.second
+    time_msec = dtime.microsecond // 1000
+    return RawDateTime(date_year, date_mon_day, time_h_m, time_sec, time_msec)
 
 
 def _refined2raw_parameters(time_mark: datetime, refined_parameters: SeriesParameters,
@@ -448,15 +465,12 @@ def _refined2raw_parameters(time_mark: datetime, refined_parameters: SeriesParam
     raw_parameters['phase_code'] = refined_parameters.phase_code
 
     # Time options
-    raw_parameters['date_year'] = time_mark.year
-    month = time_mark.month
-    day = time_mark.day
-    raw_parameters['date_mon_day'] = (month << 8) + day
-    hour = time_mark.hour
-    minute = time_mark.minute
-    raw_parameters['time_h_m'] = (minute << 8) + hour
-    raw_parameters['time_sec'] = time_mark.second
-    raw_parameters['time_msec'] = time_mark.microsecond // 1000
+    raw_dtime = _datetime2raw(time_mark)
+    raw_parameters['date_year'] = raw_dtime.date_year
+    raw_parameters['date_mon_day'] = raw_dtime.date_mon_day
+    raw_parameters['time_h_m'] = raw_dtime.time_h_m
+    raw_parameters['time_sec'] = raw_dtime.time_sec
+    raw_parameters['time_msec'] = raw_dtime.time_msec
 
     # Antenna end
     if refined_parameters.antenna_end is not None:
@@ -478,37 +492,65 @@ def _refined2raw_parameters(time_mark: datetime, refined_parameters: SeriesParam
     return raw_parameters, data_byte_length
 
 
-class ParameterSelector:
-    """
-    Filter for separation of series with different options during reading.
-    This may decrease computational costs because only necessary series will be read.
+class SeriesSelector:
+    """Selector for separation of series with different parameters during reading.
 
-    Initialize selector valid options and use check_parameters method.
-    The selector could also be improved to reject invalid options, but for now such
-    functionality is redundant.
+    The selector is initialized with valid refined parameters, which are converted
+    to raw parameters. Then selector is used as a filter at raw parameter level.
+
+    Separate time check can be used on given time marks. It potentially could be also converted to
+    raw parameter level (as done for other parameters), but many peculiarities make this process
+    too complicated.
     """
-    def __init__(self, channels: Iterable[Channel] = None,
-                 pulse_types: Iterable[str] = None,
-                 frequencies: Iterable[Frequency] = None,
-                 pulse_lengths: Iterable[TimeUnit] = None):
+    def __init__(self, start_time: datetime = None, stop_time: datetime = None,
+                 channels: Union[Channel, Iterable[Channel]] = None,
+                 pulse_types: Union[str, Iterable[str]] = None,
+                 frequencies: Union[Frequency, Iterable[Frequency]] = None,
+                 pulse_lengths: Union[TimeUnit, Iterable[TimeUnit]] = None):
+        """Initialize selector with valid parameters. If any of arguments is None, then all input
+        parameters, corresponding to the argument, are valid.
+
+        Args:
+            start_time: Start time. All inputs before it will be rejected.
+            stop_time: Stop time. All inputs after it will be rejected.
+            channels: Valid input channels.
+            pulse_types: Valid pulse types.
+            frequencies: Valid frequencies.
+            pulse_lengths: Valid pulse lengths.
+        """
+        self.start_time = start_time
+        self.stop_time = stop_time
+
         valid_parameters = defaultdict(set)
 
-        channels_set = set()
+        # Channels
+        channels_set = set(ch for ch in CHANNELS_INFO)
         if channels is not None:
-            channels_set.update(ch.value for ch in channels)
+            if isinstance(channels, Channel):
+                channels = [channels]
 
-        # If pulse types are given, we ban corresponding channels
+            channels_set.intersection_update(_channel2raw(ch) for ch in channels)
+
         if pulse_types is not None:
-            type_channels = (ch for ch, info in CHANNELS_INFO.items())
-            channels_set.update(type_channels)
+            if isinstance(pulse_types, str):
+                pulse_types = [pulse_types]
+
+            for pulse_type in pulse_types:
+                type_channels = (ch for ch, info in CHANNELS_INFO.items()
+                                 if info['type'] == pulse_type)
+                channels_set.intersection_update(type_channels)
 
         valid_parameters[RAW_NAME_TO_CODE['channel']] = channels_set
 
+        # Frequencies
         if frequencies is not None:
-            fr_lo_codes = (RAW_NAME_TO_CODE[name] for name in RAW_PARAMETERS_CODES
-                           if name.endswith('fr_lo'))
-            fr_hi_codes = (RAW_NAME_TO_CODE[name] for name in RAW_PARAMETERS_CODES
-                           if name.endswith('fr_hi'))
+            if isinstance(frequencies, Frequency):
+                frequencies = [frequencies]
+
+            fr_lo_codes = [RAW_NAME_TO_CODE[name] for name in RAW_PARAMETERS_CODES
+                           if name.endswith('fr_lo')]
+            fr_hi_codes = [RAW_NAME_TO_CODE[name] for name in RAW_PARAMETERS_CODES
+                           if name.endswith('fr_hi')]
             for freq in frequencies:
                 fr_lo, fr_hi = _frequency2raw(freq)
 
@@ -518,17 +560,21 @@ class ParameterSelector:
                 for code in fr_hi_codes:
                     valid_parameters[code].add(fr_hi)
 
+        # Pulse lengths
         if pulse_lengths is not None:
-            pulse_len_codes = (RAW_NAME_TO_CODE[name] for name in RAW_PARAMETERS_CODES
-                               if name.endswith('len'))
+            if isinstance(pulse_lengths, TimeUnit):
+                pulse_lengths = [pulse_lengths]
+
+            pulse_len_codes = [RAW_NAME_TO_CODE[name] for name in RAW_PARAMETERS_CODES
+                               if name.endswith('len')]
 
             for pulse_length in pulse_lengths:
                 for code in pulse_len_codes:
-                    valid_parameters[code].add(pulse_length)
+                    valid_parameters[code].add(_pulse_length2raw(pulse_length))
 
         self._valid_parameters = valid_parameters
 
-    def are_valid(self, parameters: Dict[int, int]) -> bool:
+    def validate_parameters(self, parameters: Dict[int, int]) -> bool:
         """Check if given options pass the selector.
 
         Args:
@@ -541,7 +587,26 @@ class ParameterSelector:
         for key, test_values_set in self._valid_parameters.items():
             if key in parameters and parameters[key] not in test_values_set:
                 return False
+
         return True
+
+    def validate_time_mark(self, time_mark: datetime) -> bool:
+        """Check if given time mark is within selector time limits.
+
+        Args:
+            time_mark: Time mark.
+
+        Returns:
+            valid: True if valid.
+        """
+        if self.start_time is not None and time_mark < self.start_time:
+            return False
+
+        if self.stop_time is not None and time_mark > self.stop_time:
+            return False
+
+        return True
+
 
 ###############################################################
 # ###########      Reader and Writer Classes     ############ #
@@ -554,7 +619,7 @@ class DataFileIO:
 
 class DataFileReader(DataFileIO):
     """Read binary data stream."""
-    def __init__(self, stream: IO, file_info: FileInfo, series_selector: ParameterSelector = None,
+    def __init__(self, stream: IO, file_info: FileInfo, series_selector: SeriesSelector = None,
                  only_headers: bool = False):
         """Create reader instance.
 
@@ -642,15 +707,19 @@ class DataFileReader(DataFileIO):
             elif header_code is None:
                 break
 
-            # Check if options pass selector
-            if self.selector is not None:
-                if not self.selector.are_valid(raw_parameters):
-                    self.stream.seek(data_length, 1)  # from current position
-                    continue
+            # Check if parameters pass selector
+            if self.selector is not None and not self.selector.validate_parameters(raw_parameters):
+                self.stream.seek(data_length, 1)  # from current position
+                continue
 
             # Form refined options
             time_mark, series_parameters = \
                 _raw2refined_parameters(raw_parameters, data_length, self.file_info)
+
+            # Check if time mark within the limits
+            if self.selector is not None and not self.selector.validate_time_mark(time_mark):
+                self.stream.seek(data_length, 1)  # from current position
+                continue
 
             if not self.only_headers:
                 quadratures = self.read_quadratures(data_length)
@@ -835,7 +904,7 @@ class DataFileWriter(DataFileIO):
 
 @contextlib.contextmanager
 def open_data_file(path: Path, mode: str = 'r', compress_on_write: bool = False,
-                   only_headers: bool = False, series_selector: ParameterSelector = None
+                   only_headers: bool = False, series_selector: SeriesSelector = None
                    ) -> DataFileIO:
     """Open IISR datafile. Creates a temporal file for compress operations.
 
@@ -932,7 +1001,7 @@ def _collect_valid_file_paths(paths: Iterable[Path]) -> List[Path]:
 
 @contextlib.contextmanager
 def read_files_by(read_type: str, paths: Iterable[Path], only_headers: bool = False,
-                  series_selector: ParameterSelector = None):
+                  series_selector: SeriesSelector = None):
     """
     Read all data files using given paths.
 
