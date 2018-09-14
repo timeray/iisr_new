@@ -781,7 +781,8 @@ class DataFileReader(DataFileIO):
 
         quadratures = np.fromfile(self.stream, dtype=dtype, count=1)
 
-        return np.array(quadratures['quad_I'][0]) + 1j * np.array(
+        # Invert Q quadrature to compensate for IISR demodulation
+        return np.array(quadratures['quad_I'][0]) - 1j * np.array(
             quadratures['quad_Q'][0])
 
     def _read_raw_parameters_block(self, parameters: dict, block_length: int):
@@ -872,7 +873,8 @@ class DataFileWriter(DataFileIO):
         """
 
         quads_i = (int(number) for number in quadratures.real)
-        quads_q = (int(number) for number in quadratures.imag)
+        # Invert Q quadrature to mimic inversion in original .ise data
+        quads_q = (-int(number) for number in quadratures.imag)
 
         quads_i_bytes = (number.to_bytes(2, BYTEORDER, signed=True) for number in quads_i)
         quads_q_bytes = (number.to_bytes(2, BYTEORDER, signed=True) for number in quads_q)

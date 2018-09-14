@@ -3,8 +3,6 @@ import itertools as it
 import random
 import tempfile
 
-from typing import Dict, Tuple, Any, List
-
 from iisr.representation import CHANNELS_INFO, Channel
 from iisr.units import Frequency, TimeUnit
 from datetime import datetime, timedelta
@@ -14,7 +12,8 @@ from iisr import io
 import numpy as np
 
 
-TEST_FILE_NAME = '20150202_0000_000_0000_002_000.ISE'
+DUMMY_FILE_NAME = '20150202_0000_000_0000_002_000.ISE'
+TEST_REAL_FILEPATH = Path(__file__).parent / '20150606_0000_000_0000_002_000.ISE'
 DEFAULT_DATETIME = datetime(2015, 6, 7, 10, 55, 37, 437000)
 
 
@@ -108,7 +107,7 @@ def make_random_test_file(n_unique_series=2, n_time_marks=2, time_step_sec=1):
             series_list.append(series)
 
     with tempfile.TemporaryDirectory() as temp_dirname:
-        file_path = Path(temp_dirname) / TEST_FILE_NAME
+        file_path = Path(temp_dirname) / DUMMY_FILE_NAME
         with io.open_data_file(file_path, 'w') as writer:
             for series in series_list:
                 writer.write(series)
@@ -348,7 +347,7 @@ class TestRead(TestCase):
             test_parameters.append(get_test_parameters(freq=fr, pulse_len=len_, channel=ch))
 
         with tempfile.TemporaryDirectory() as dirname:
-            test_filepath = Path(dirname) / TEST_FILE_NAME
+            test_filepath = Path(dirname) / DUMMY_FILE_NAME
 
             with io.open_data_file(test_filepath, 'w') as data_file:
                 for param in test_parameters:
@@ -361,8 +360,8 @@ class TestRead(TestCase):
                     data_file.write(series)
 
             # Check if selector correct
-            with io.read_files_by('series', [test_filepath], series_selector=filter_) as generator:
-                series_list = list(generator)
+            with io.open_data_file(test_filepath, series_selector=filter_) as reader:
+                series_list = list(reader)
 
             self.assertEqual(len(series_list), 2)
             for series in series_list:
@@ -371,26 +370,57 @@ class TestRead(TestCase):
                 self.assertEqual(series.parameters.pulse_length, valid_params['pulse_lengths'][0])
                 self.assertEqual(series.parameters.pulse_type, valid_params['pulse_types'][0])
 
+    def test_read_real_file(self):
+        with io.open_data_file(TEST_REAL_FILEPATH) as data_file:
+            series_list = list(data_file)
+        self.assertEqual(len(series_list), 100)
+
+        first_series = series_list[0]  # type: io.SignalTimeSeries
+        self.assertEqual(first_series.time_mark.year, 2015)
+        self.assertEqual(first_series.time_mark.month, 6)
+        self.assertEqual(first_series.time_mark.day, 6)
+
+        unique_freqs = set()
+        unique_len = set()
+        unique_channels = set()
+        for series in series_list:
+            unique_freqs.add(series.parameters.frequency)
+            unique_len.add(series.parameters.pulse_length)
+            unique_channels.add(series.parameters.channel)
+
+        for freq in [155.5, 155.8, 159.5, 159.8]:
+            freq = Frequency(freq, 'MHz')
+            self.assertIn(freq, unique_freqs)
+
+        for len_ in [0, 200, 700, 900]:
+            len_ = TimeUnit(len_, 'us')
+            self.assertIn(len_, unique_len)
+
+        for ch in [0, 1, 2, 3]:
+            ch = Channel(ch)
+            self.assertIn(ch, unique_channels)
+
 
 class TestWriteRead(TestCase):
     def test_write_read_reciprocity(self):
-        test_file_path = TEST_FILE_NAME
+        with tempfile.TemporaryDirectory() as dirname:
+            test_file_path = Path(dirname) / DUMMY_FILE_NAME
 
-        # Create test options
-        test_parameters = get_test_parameters()
-        time_mark = DEFAULT_DATETIME
-        n_samples = test_parameters.n_samples
+            # Create test options
+            test_parameters = get_test_parameters()
+            time_mark = DEFAULT_DATETIME
+            n_samples = test_parameters.n_samples
 
-        test_quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
-        test_quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
-        test_quadratures = test_quad_i + 1j * test_quad_q
+            test_quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
+            test_quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
+            test_quadratures = test_quad_i + 1j * test_quad_q
 
-        test_series = io.SignalTimeSeries(time_mark, test_parameters, test_quadratures)
-        with io.open_data_file(Path(test_file_path), 'w') as writer:
-            writer.write(test_series)
+            test_series = io.SignalTimeSeries(time_mark, test_parameters, test_quadratures)
+            with io.open_data_file(test_file_path, 'w') as writer:
+                writer.write(test_series)
 
-        with io.open_data_file(Path(test_file_path), 'r') as reader:
-            series = next(reader.read_series())
+            with io.open_data_file(test_file_path, 'r') as reader:
+                series = next(reader.read_series())
 
         # Time
         self.assertEqual(time_mark, series.time_mark)
@@ -434,13 +464,13 @@ class TestOpenDataFile(TestCase):
     def test_input(self):
         with self.assertRaises(ValueError):
             with tempfile.TemporaryDirectory() as dirname:
-                path = Path(dirname) / TEST_FILE_NAME
+                path = Path(dirname) / DUMMY_FILE_NAME
                 with io.open_data_file(path, 'rb'):
                     pass
 
     def test_read(self):
         with tempfile.TemporaryDirectory() as dirname:
-            path = Path(dirname) / TEST_FILE_NAME
+            path = Path(dirname) / DUMMY_FILE_NAME
 
             with self.assertRaises(FileNotFoundError):
                 with io.open_data_file(path, 'r'):
@@ -453,7 +483,7 @@ class TestOpenDataFile(TestCase):
 
     def test_write(self):
         with tempfile.TemporaryDirectory() as dirname:
-            path = Path(dirname) / TEST_FILE_NAME
+            path = Path(dirname) / DUMMY_FILE_NAME
             with io.open_data_file(path, 'w') as writer:
                 self.assertTrue(path.exists())
                 self.assertIsInstance(writer, io.DataFileWriter)
@@ -462,7 +492,7 @@ class TestOpenDataFile(TestCase):
     @mock.patch('tempfile.TemporaryFile')
     def test_read_compressed(self, mocked_gzip, mocked_tempfile):
         with tempfile.TemporaryDirectory() as dirname:
-            path = Path(dirname) / (TEST_FILE_NAME + io.ARCHIVE_EXTENSION)
+            path = Path(dirname) / (DUMMY_FILE_NAME + io.ARCHIVE_EXTENSION)
 
             with self.assertRaises(FileNotFoundError):
                 with io.open_data_file(path, 'r'):
@@ -480,10 +510,10 @@ class TestOpenDataFile(TestCase):
         mocked_gzip.return_value = ' '
 
         with tempfile.TemporaryDirectory() as dirname:
-            path_with_extension = Path(dirname) / (TEST_FILE_NAME + io.ARCHIVE_EXTENSION)
+            path_with_extension = Path(dirname) / (DUMMY_FILE_NAME + io.ARCHIVE_EXTENSION)
 
             # When called without archive extension
-            path = Path(dirname) / TEST_FILE_NAME
+            path = Path(dirname) / DUMMY_FILE_NAME
             with io.open_data_file(path, 'w', compress_on_write=True) as writer:
                 self.assertIsInstance(writer, io.DataFileWriter)
 
