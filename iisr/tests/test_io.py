@@ -462,6 +462,24 @@ class TestReadFiles(TestCase):
                     self.assertEqual(package.time_mark, series.time_mark)
 
 
+class TestCollectPaths(TestCase):
+    def test(self):
+        with tempfile.TemporaryDirectory() as dirname:
+            dirpath = Path(dirname)
+            test_paths = []
+            for i in range(10):
+                filename = '{}.iSe'.format(i)
+                filepath = dirpath / filename
+                filepath.touch()
+                test_paths.append(filepath)
+
+            paths = io._collect_valid_file_paths(dirpath)
+
+            # Should be sorted
+            for test_path, path in zip(test_paths, paths):
+                self.assertEqual(test_path, path)
+
+
 class TestOpenDataFile(TestCase):
     def test_input(self):
         with self.assertRaises(ValueError):

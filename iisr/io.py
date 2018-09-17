@@ -30,8 +30,7 @@ from iisr.representation import Channel, CHANNELS_INFO
 from iisr import units
 from iisr.units import Frequency, TimeUnit
 
-__all__ = ['DataFileReader', 'DataFileWriter', 'open_data_file',
-           'read_files_by_series', 'read_files_by_packages']
+__all__ = ['DataFileReader', 'DataFileWriter', 'open_data_file', 'read_files_by']
 ARCHIVE_EXTENSION = '.gz'
 FILE_EXTENSIONS = ('.ISE', '.ISE.GZ', '.IST', '.IST.GZ')
 DELAY_FORMULA_CONSTANT = -960 - 50
@@ -968,19 +967,15 @@ def open_data_file(path: Path, mode: str = 'r', compress_on_write: bool = False,
         raise AssertionError('Unexpected behaviour')
 
 
-def _collect_valid_file_paths(paths: Iterable[Path]) -> List[Path]:
-    """
-    Search through given paths to create united file list of IISR data files.
+def _collect_valid_file_paths(paths: Union[Path, Iterable[Path]]) -> List[Path]:
+    """Search through given paths to gather file list of IISR data files.
 
-    Parameters
-    ----------
-    paths: str or list of str
-        Paths to data files. May contain directory paths and file paths.
-        Function does not consider file in subdirectories.
+    Args:
+        paths: Paths to data files. May contain directory paths and file paths.
+            Function does not consider file in subdirectories.
 
-    Returns
-    -------
-    files_paths:
+    Returns:
+        gathered_paths: Sorted list on IISR data file paths.
     """
     if isinstance(paths, Path):
         paths = [paths]
@@ -989,16 +984,17 @@ def _collect_valid_file_paths(paths: Iterable[Path]) -> List[Path]:
     files_paths = []
 
     def check_and_add_path(new_path: Path):
-        if new_path.suffix.upper().endswith(FILE_EXTENSIONS):
+        if new_path.exists() and new_path.suffix.upper().endswith(FILE_EXTENSIONS):
             files_paths.append(new_path.resolve())
 
     for path in paths:
-        if path.exists():
-            check_and_add_path(path)
-        elif path.is_dir():
+        if path.is_dir():
             for file_in_dir in sorted(os.listdir(str(path))):
                 check_and_add_path(path / file_in_dir)
-    return files_paths
+        else:
+            check_and_add_path(path)
+
+    return sorted(files_paths)
 
 
 @contextlib.contextmanager
