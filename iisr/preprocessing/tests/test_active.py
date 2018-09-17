@@ -1,7 +1,7 @@
 from unittest import main, TestCase
 from iisr.preprocessing.active import *
 from iisr.representation import Channel
-from iisr.io import SeriesParameters, ExperimentParameters
+from iisr.io import SeriesParameters, ExperimentParameters, FileInfo
 from iisr.units import Frequency, TimeUnit
 from datetime import datetime, timedelta
 from tempfile import NamedTemporaryFile
@@ -132,8 +132,9 @@ class TestActiveResult(TestCase):
 
             file.seek(0)
 
-            with self.assertRaises(NotImplementedError):
-                load_results = ActiveResult.load_txt([file])
+            with self.assertWarns(UserWarning):
+                with self.assertRaises(NotImplementedError):
+                    ActiveResult.load_txt([file])
 
         # Empty results
         empty_results = ActiveResult(parameters=params, time_marks=[], power=None, coherence=None)
@@ -148,6 +149,7 @@ class TestNarrowbandActiveHander(TestCase):
         handler = LongPulseActiveHandler(eval_power=True, eval_coherence=True)
 
         global_params = get_global_params()
+        file_info = FileInfo(0, 0, 0, 0)
         freq = Frequency(155.5, 'MHz')
         pulse_len = TimeUnit(700, 'us')
         pulse_type = 'long'
@@ -155,8 +157,8 @@ class TestNarrowbandActiveHander(TestCase):
         phase_code = 0
 
         params = [
-            SeriesParameters(global_params, channel=ch, frequency=freq, pulse_length=pulse_len,
-                             phase_code=phase_code, pulse_type=pulse_type)
+            SeriesParameters(file_info, global_params, channel=ch, frequency=freq,
+                             pulse_length=pulse_len, phase_code=phase_code)
             for ch in channels
         ]
 

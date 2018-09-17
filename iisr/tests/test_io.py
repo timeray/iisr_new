@@ -65,9 +65,11 @@ def get_test_parameters(n_samples=2048, freq=155.5, pulse_len=700,
     return test_parameters
 
 
-def get_test_signal_time_series() -> io.SignalTimeSeries:
-    time_mark = datetime(2015, 6, 7, 8, 9, 10, 11)
-    test_params = get_test_parameters()
+def get_test_signal_time_series(time_mark=datetime(2015, 6, 7, 8, 9, 10, 11), test_params=None,
+                                **param_kwargs) -> io.SignalTimeSeries:
+    if test_params is None:
+        test_params = get_test_parameters(**param_kwargs)
+
     quad_i = np.random.randint(-100, 100, test_params.n_samples)
     quad_q = np.random.randint(-100, 100, test_params.n_samples)
     quadratures = quad_i + 1j * quad_q
