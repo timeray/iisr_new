@@ -5,10 +5,13 @@ Create configuration files, based on default .ini file, to modify options of pro
 import os
 import argparse
 import configparser
+from pathlib import Path
+
 from iisr.preprocessing import LaunchConfig, run_processing
 from iisr import units
+from iisr.representation import Channel
 
-DEFAULT_CONFIG_FILE = os.path.join('..', 'first_stage_config.ini')
+DEFAULT_CONFIG_FILE = os.path.join('..', 'pre_processing_config.ini')
 
 description = """
 Manages the launch of first stage processing. Uses configuration file passed to -c 
@@ -70,13 +73,12 @@ def main(argv=None):
 
     # Create LaunchConfig instance and pass it to processing
     launch_config = LaunchConfig(
-        paths=parse_options(config['Common']['paths'], str),
+        paths=parse_options(config['Common']['paths'], Path),
         n_accumulation=int(config['Common']['n_accumulation']),
         mode=config['Common']['mode'],
-        channels=parse_options(config['Common']['channels'], int),
+        channels=parse_options(config['Common']['channels'], Channel),
         frequencies=parse_options(config['Common']['frequencies'], units.Frequency, 'MHz'),
         pulse_length=parse_options(config['Common']['pulse_length'], units.TimeUnit, 'us'),
-        phase_code=parse_options(config['Common']['phase_code'], int),
         accumulation_timeout=int(config['Common']['accumulation_timeout']),
     )
     run_processing(launch_config)
