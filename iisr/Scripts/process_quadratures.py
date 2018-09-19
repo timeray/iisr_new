@@ -2,16 +2,21 @@
 Command line program for first stage processing of IISR data.
 Create configuration files, based on default .ini file, to modify options of processing.
 """
-import os
+import sys
 import argparse
 import configparser
+import logging
 from pathlib import Path
 
 from iisr.preprocessing import LaunchConfig, run_processing
-from iisr import units
+from iisr import IISR_PATH
 from iisr.representation import Channel
+from iisr.units import Frequency, TimeUnit
+from typing import Callable, List
 
-DEFAULT_CONFIG_FILE = os.path.join('..', 'pre_processing_config.ini')
+
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(message)s')
+DEFAULT_CONFIG_FILE = IISR_PATH / 'pre_processing_config.ini'
 
 description = """
 Manages the launch of first stage processing. Uses configuration file passed to -c 
@@ -22,45 +27,49 @@ config = configparser.ConfigParser()
 SEPARATOR = ','
 
 
-def parse_options(option, option_type, *type_args):
-    """
-    Parse configuration option that should be None, list or single value.
+def option_parser_decorator(parser: Callable) -> Callable:
+    def _parser_wrapper(option):
+        if not option:
+            raise ValueError('Empty option string')
 
-    Parameters
-    ----------
-    option: str
-        String option to parse.
-    option_type: type
-        Type of option. Must accept str.
+        if option.lower() == 'none':
+            return None
+        else:
+            return parser(option)
 
-    Returns
-    -------
-    value: None or list of given type
-    """
-    if not option:
-        raise ValueError('Empty option string')
+    return _parser_wrapper
 
-    if option.lower() == 'none':
-        return None
-    else:
-        return [option_type(option, *type_args) for option in option.split(SEPARATOR)]
+
+@option_parser_decorator
+def _parse_path(paths: str) -> List[Path]:
+    return [Path(path) for path in paths.split(SEPARATOR)]
+
+
+@option_parser_decorator
+def _parse_channels(channels: str) -> List[Channel]:
+    return [Channel(int(ch)) for ch in channels.split(SEPARATOR)]
+
+
+@option_parser_decorator
+def _parse_frequency(frequencies: str) -> List[Frequency]:
+    return [Frequency(float(freq), 'MHz') for freq in frequencies.split(SEPARATOR)]
+
+
+@option_parser_decorator
+def _parse_time_units(time_units_values_us: str) -> List[TimeUnit]:
+    return [TimeUnit(float(val), 'us') for val in time_units_values_us]
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=description)
     # Parse arguments
-    parser.add_argument('-c', '--config-file', default=DEFAULT_CONFIG_FILE, type=str,
+    parser.add_argument('-c', '--config-file', default=str(DEFAULT_CONFIG_FILE),
                         help='configuration file')
-    parser.add_argument('--paths', type=str, nargs='*',
-                        help='paths to file or directory')
-    parser.add_argument('-m', '--mode', type=str,
-                        help='mode of operation: incoherent, satellite or passive')
-    parser.add_argument('--channels', type=int, nargs='*',
-                        help='channels to process')
-    parser.add_argument('--frequencies', type=float, nargs='*',
-                        help='frequencies to process')
-    parser.add_argument('--n-accumulation', type=int,
-                        help='number of samples to accumulate')
+    parser.add_argument('--paths', nargs='*', help='paths to file or directory')
+    parser.add_argument('-m', '--mode', help='mode of operation: incoherent, satellite or passive')
+    parser.add_argument('--channels', nargs='*', help='channels to process')
+    parser.add_argument('--frequencies', nargs='*', help='frequencies to process')
+    parser.add_argument('--n-accumulation', help='number of samples to accumulate')
     args = parser.parse_args(argv)
 
     # Read given configuration file
@@ -73,12 +82,12 @@ def main(argv=None):
 
     # Create LaunchConfig instance and pass it to processing
     launch_config = LaunchConfig(
-        paths=parse_options(config['Common']['paths'], Path),
+        paths=_parse_path(config['Common']['paths']),
         n_accumulation=int(config['Common']['n_accumulation']),
         mode=config['Common']['mode'],
-        channels=parse_options(config['Common']['channels'], Channel),
-        frequencies=parse_options(config['Common']['frequencies'], units.Frequency, 'MHz'),
-        pulse_length=parse_options(config['Common']['pulse_length'], units.TimeUnit, 'us'),
+        channels=_parse_channels(config['Common']['channels']),
+        frequencies=_parse_frequency(config['Common']['frequencies']),
+        pulse_length=_parse_time_units(config['Common']['pulse_length']),
         accumulation_timeout=int(config['Common']['accumulation_timeout']),
     )
     run_processing(launch_config)

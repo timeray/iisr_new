@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 import logging
+import time
 from pathlib import Path
 
 import numpy as np
@@ -63,7 +64,7 @@ class LaunchConfig:
 
         for ch in channels:
             if not isinstance(ch, Channel):
-                raise ValueError('Incorrect channel: {}'.format(ch))
+                raise TypeError('Incorrect channel type: {}'.format(type(ch)))
         self.channels = channels
 
         if frequencies is not None:
@@ -121,50 +122,47 @@ def aggregate_packages(packages: Iterator[io.TimeSeriesPackage],
         quadratures: 2-D Array of accumulated quadratures. Shape [n_accumulation x n_samples]
     """
 
-    def to_arrays(records):
-        marks = []
-        quads = []
-        for time_mark, quad in records:
-            marks.append(time_mark)
-            quads.append(quad)
-
-        marks = np.array(marks, dtype=datetime)
-        quads = np.array(quads, dtype=np.complex)  # [n_acc, quad_length]
-        return marks, quads
+    def to_arrays(marks, quads):
+        return np.array(marks, dtype=datetime), np.stack(quads)
 
     # List of unique quadratures: keys - parameters, values - (time_marks, quadratures)
-    unique_list = defaultdict(list)
-    prev_time_mark = datetime.min  # Same for all tracked parameters
+    unique_list = defaultdict(lambda: ([], []))
+    prev_time_mark = None
     for package in packages:
+        # Check for timeout
+        if prev_time_mark is None:
+            time_diff = timedelta(0)
+        else:
+            time_diff = package.time_mark - prev_time_mark
+
+        if time_diff > timeout:
+            if not drop_timeout_series:
+                # Yield what was accumulated
+                for params, acc_marks, acc_quads in unique_list:
+                    time_marks, quadratures = to_arrays(acc_marks, acc_quads)
+                    yield params, time_marks, quadratures
+
+            # Reset buffer
+            unique_list = defaultdict(lambda: ([], []))
+
+        elif time_diff < timedelta(0):
+            raise RuntimeError(
+                'New time mark is earlier than previous (new {}, prev {})'
+                ''.format(package.time_mark, prev_time_mark)
+            )
+
+        prev_time_mark = package.time_mark
+
         for time_series in package.time_series_list:
             params = time_series.parameters
-            new_record = (time_series.time_mark, time_series.quadratures)
-
-            # Check for timeout
-            if unique_list[params]:
-                time_diff = time_series.time_mark - prev_time_mark
-                if time_diff > timeout:
-                    if drop_timeout_series:
-                        # Reset buffer (now all parameters are invalid)
-                        unique_list = defaultdict(list)
-                    else:
-                        # Yield what was accumulated
-                        time_marks, quadratures = to_arrays(unique_list[params])
-                        del unique_list[params]
-                        yield params, time_marks, quadratures
-
-                elif time_diff < timedelta(0):
-                    raise RuntimeError(
-                        'New time mark is earlier than previous (new {}, prev {})'
-                        ''.format(time_series.time_mark, prev_time_mark)
-                    )
-
-            prev_time_mark = time_series.time_mark
+            acc_marks, acc_quads = unique_list[params]
 
             # Append new record. If full, yield and reset buffer.
-            unique_list[params].append(new_record)
-            if len(unique_list[params]) >= n_accumulation:
-                time_marks, quadratures = to_arrays(unique_list[params])
+            acc_marks.append(time_series.time_mark)
+            acc_quads.append(time_series.quadratures)
+
+            if len(acc_marks) >= n_accumulation:
+                time_marks, quadratures = to_arrays(acc_marks, acc_quads)
                 del unique_list[params]
                 yield params, time_marks, quadratures
 
@@ -182,6 +180,7 @@ def run_processing(config: LaunchConfig):
     results: FirstStageResults
     """
     logging.info('Start processing')
+    start_time = time.time()
     logging.info(config)
 
     # Filter realizations for each time step by channels, frequencies and other options
@@ -194,16 +193,19 @@ def run_processing(config: LaunchConfig):
         filter_parameters['pulse_lengths'] = config.pulse_length
 
     # Initialize handlers based on options
-    if config.mode == 'active':
-        handlers = [ShortPulseActiveHandler(), LongPulseActiveHandler()]
+    if config.mode == 'incoherent':
+        handler_classes = [LongPulseActiveHandler, ShortPulseActiveHandler]
     elif config.mode == 'passive':
         raise NotImplementedError()
     else:
         raise ValueError('Unknown mode: {}'.format(config.mode))
 
+    handlers = []
+
     # Pick series
     series_filter = io.SeriesSelector(**filter_parameters)
-    with io.read_files_by_packages(paths=config.paths, series_selector=series_filter) as generator:
+    with io.read_files_by('blocks', paths=config.paths,
+                          series_selector=series_filter) as generator:
         # Group series to form arrays of length equal to accumulation duration, check for timeouts
         accumulated_quadratures = aggregate_packages(generator,
                                                      config.n_accumulation,
@@ -214,12 +216,19 @@ def run_processing(config: LaunchConfig):
             for handler in handlers:
                 if handler.validate(params):
                     handler.process(params, time_marks, quadratures)
+                    break
+            else:
+                for handler_cls in handler_classes:
+                    handler = handler_cls()
+                    if handler.validate(params):
+                        handlers.append(handler)
+                        handler.process(params, time_marks, quadratures)
+                        break
 
     # Gather results from handlers and save them
     manager = DataManager()
     for handler in handlers:
         result = handler.finish()
         manager.save_preprocessing_result(result)
-    logging.info('Processing successful')
 
-
+    logging.info('Processing successful. Elapsed time: {:.0f} s'.format(time.time() - start_time))

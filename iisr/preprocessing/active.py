@@ -2,11 +2,12 @@ import itertools as it
 import json
 import copy
 import warnings
+from scipy import signal
 from collections import defaultdict
 from datetime import datetime, date, timedelta
 
 import numpy as np
-from typing import List, TextIO, Dict, Sequence
+from typing import List, TextIO, Dict, Sequence, Tuple
 
 from iisr.representation import CHANNELS, Channel
 from iisr.preprocessing.representation import HandlerResult, Handler
@@ -17,7 +18,7 @@ from iisr.utils import TIME_FMT, DATE_FMT, central_time
 
 __all__ = ['calc_delays', 'calc_distance', 'ActiveParameters', 'ActiveResult', 'PowerParams',
            'CoherenceParams', 'LongPulseActiveHandler', 'ShortPulseActiveHandler',
-           'EvalCoherenceError', 'ReadingError']
+           'EvalCoherenceError', 'ReadingError', 'square_barker']
 
 
 class ReadingError(Exception):
@@ -26,6 +27,41 @@ class ReadingError(Exception):
 
 class EvalCoherenceError(Exception):
     pass
+
+
+def square_barker(n_points: int, barker_len: int) -> np.ndarray:
+    """Return square Barker code with specified number of elements.
+
+    Waveform is fit into number of given points, meaning that it starts at 0 and ends at n_points-1.
+
+    Args:
+        n_points: Number of discrete points.
+        barker_len: Number of elements in sequence (2, 3, 4, 5, 11, 13).
+
+    Returns:
+        waveform: Discrete Barker sequence (1 or -1).
+    """
+    if barker_len == 2:
+        arr = np.array([1, -1])
+    elif barker_len == 3:
+        arr = np.array([1, 1, -1])
+    elif barker_len == 4:
+        arr = np.array([1, -1, 1, 1])  # or 1, -1, -1, -1
+    elif barker_len == 5:
+        arr = np.array([1, 1, 1, -1, 1])
+    elif barker_len == 11:
+        arr = np.array([1, 1, 1, -1, -1, -1, 1, -1, -1, 1, -1])
+    elif barker_len == 13:
+        arr = np.array([1, 1, 1, 1, 1, -1, -1, 1, 1, -1, 1, -1, 1])
+    else:
+        raise ValueError('Wrong Barker element number')
+
+    discrete = barker_len / (n_points - 1)
+    res = []
+    for i in range(n_points - 1):
+        res.append(arr[int(np.floor(i * discrete))])
+    res.append(arr[-1])
+    return np.array(res, dtype=float)
 
 
 def calc_delays(sampling_frequency: Frequency, total_delay: TimeUnit, n_samples: int) -> TimeUnit:
@@ -284,13 +320,14 @@ class ActiveResult(HandlerResult):
             date_mask = np.ones(len(self.time_marks), dtype=bool)
 
         # Convert all repeatable arrays to strings
-        distance_str = ['{}'.format(dist[dist_units]) for dist in self.distance]
+        float_fmt = '{{:.{}f}}'.format(precision)
+
+        distance_str = [float_fmt.format(dist[dist_units]) for dist in self.distance]
         time_str = [time_mark.strftime(TIME_FMT) for time_mark in self.time_marks[date_mask]]
         date_str = [time_mark.strftime(DATE_FMT) for time_mark in self.time_marks[date_mask]]
 
         # Form long column iterators: distance changes every row, time and date change after all
         # distances
-        float_fmt = '{{:.{}f}}'.format(precision)
         columns = [
             it.chain.from_iterable(it.repeat(d, len(distance_str)) for d in date_str),
             it.chain.from_iterable(it.repeat(t, len(distance_str)) for t in time_str),
@@ -435,6 +472,9 @@ class ActiveHandler(Handler):
     valid_pulse_type = NotImplemented
     valid_band_type = NotImplemented
 
+    def preproc_quads(self, quadratures: np.ndarray) -> np.ndarray:
+        return NotImplemented
+
     def __init__(self, n_fft=None, h_step=None, eval_power=True, eval_coherence=False):
         self.nfft = n_fft
         self.h_step = h_step
@@ -501,7 +541,7 @@ class ActiveHandler(Handler):
         return adjacent_params
 
     def _process(self, time_marks: np.ndarray, quadratures: Dict[Channel, np.ndarray]):
-        """Function to evaluate power and coherence when all channels arrived"""
+        """Function to evaluate power and coherence when all channels received"""
         self.time_marks.append(central_time(time_marks))
         channels = sorted(quadratures.keys())
 
@@ -537,7 +577,10 @@ class ActiveHandler(Handler):
         if len(time_marks) != len(quadratures):
             raise ValueError('Input quadratures should have shape (n_time_marks, n_samples)')
 
-        # Join adjacent channels or compute previous channel
+        # Preprocess quadratures
+        quadratures = self.preproc_quads(quadratures)
+
+        # Join adjacent channels
         channel = params.channel
         if self.await_input is not None:
             prev_params, prev_time_marks, prev_quadratures = self.await_input
@@ -548,7 +591,7 @@ class ActiveHandler(Handler):
                 self.await_input = params, time_marks, quadratures
             # If adjacent channel appeared, process and reset await_input
             elif channel == self.adjacent_channels[prev_channel]:
-                if not all(time_marks == prev_time_marks):
+                if not (time_marks == prev_time_marks).all():
                     raise RuntimeError('Invalid time marks of adjacent channel {}'
                                        ''.format(prev_channel))
                 joint_quads = {channel: quadratures, prev_channel: prev_quadratures}
@@ -612,7 +655,59 @@ class LongPulseActiveHandler(ActiveHandler):
     """Class for processing of narrowband series (default channels 0, 2)"""
     valid_pulse_type = 'long'
 
+    def __init__(self, *args, filter_half_band=25000, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._filter = None
+        self.filter_half_band = filter_half_band
+
+    @property
+    def filter(self) -> Dict[str, np.ndarray]:
+        if self._filter is None:
+            any_input_params = next(iter(self.actual_input_params))
+            nyq = 0.5 * any_input_params.sampling_frequency['Hz']
+            crit_norm_freq = self.filter_half_band / nyq
+
+            filt = signal.butter(7, crit_norm_freq)  # type: Tuple[np.ndarray, np.ndarray]
+            self._filter = {'numerator': filt[0], 'denominator': filt[1]}
+        return self._filter
+
+    def preproc_quads(self, quadratures: np.ndarray, axis=1) -> np.ndarray:
+        return signal.lfilter(
+            self.filter['numerator'], self.filter['denominator'], quadratures, axis=axis
+        )
+
 
 class ShortPulseActiveHandler(ActiveHandler):
     """Class for processing of wideband series (default channels 1, 3)"""
     valid_pulse_type = 'short'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._code = None
+        self._is_noise = None
+
+    @property
+    def is_noise(self):
+        if self._is_noise is None:
+            any_input_params = next(iter(self.actual_input_params))
+            phase_code = any_input_params.phase_code
+            pulse_len = any_input_params.pulse_length['us']
+            self._is_noise = (phase_code == 0) and (int(pulse_len) == 0)
+        return self._is_noise
+
+    @property
+    def code(self):
+        if self._code is None:
+            any_input_params = next(iter(self.actual_input_params))
+            dlength = any_input_params.pulse_length['us'] \
+                      * any_input_params.sampling_frequency['MHz']
+            self._code = square_barker(int(dlength), any_input_params.phase_code)
+        return self._code
+
+    def preproc_quads(self, quadratures: np.ndarray, axis=1) -> np.ndarray:
+        if self.is_noise:
+            return quadratures
+        else:
+            return np.apply_along_axis(signal.correlate, axis=axis, arr=quadratures,
+                                       in2=self.code, mode='same')
+

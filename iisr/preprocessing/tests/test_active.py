@@ -9,6 +9,56 @@ import numpy as np
 import os
 
 
+class TestSquareBarker(TestCase):
+    def test(self):
+        length = 5
+        barker = 5
+        test_pulse = np.array([1., 1., 1., -1., 1.])
+        pulse = square_barker(length, barker)
+        self.assertIsInstance(pulse, np.ndarray)
+        self.assertEqual(len(pulse), length)
+        np.testing.assert_almost_equal(test_pulse, pulse)
+
+        length = 20
+        barker = 5
+        pulse = square_barker(length, barker)
+        self.assertIsInstance(pulse, np.ndarray)
+        self.assertEqual(len(pulse), length)
+        np.testing.assert_almost_equal(np.repeat(test_pulse, length // barker), pulse)
+
+        length = 7
+        barker = 5
+        test_pulse = np.array([1., 1., 1., 1., -1., 1., 1.])
+        pulse = square_barker(length, barker)
+        self.assertIsInstance(pulse, np.ndarray)
+        self.assertEqual(len(pulse), length)
+        np.testing.assert_almost_equal(test_pulse, pulse)
+
+        length = 7
+        barker = 3
+        test_pulse = np.array([1., 1., 1., 1., -1., -1., -1.])
+        pulse = square_barker(length, barker)
+        self.assertIsInstance(pulse, np.ndarray)
+        self.assertEqual(len(pulse), length)
+        np.testing.assert_almost_equal(test_pulse, pulse)
+
+        length = 12
+        barker = 5
+        test_pulse = np.array([1., 1., 1., 1., 1., 1., 1., -1., -1., 1., 1., 1.])
+        pulse = square_barker(length, barker)
+        self.assertIsInstance(pulse, np.ndarray)
+        self.assertEqual(len(pulse), length)
+        np.testing.assert_almost_equal(test_pulse, pulse)
+
+        length = 5
+        barker = 11
+        test_pulse = np.array([1., 1., -1., -1., -1.])
+        pulse = square_barker(length, barker)
+        self.assertIsInstance(pulse, np.ndarray)
+        self.assertEqual(len(pulse), length)
+        np.testing.assert_almost_equal(test_pulse, pulse)
+
+
 class TestCalcs(TestCase):
     def test_calc_delays(self):
         sampling_freq = Frequency(1, 'MHz')
