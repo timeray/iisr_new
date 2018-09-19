@@ -36,6 +36,7 @@ FILE_EXTENSIONS = ('.ISE', '.ISE.GZ', '.IST', '.IST.GZ')
 DELAY_FORMULA_CONSTANT = -960 - 50
 KEYWORD = b'ORDA'
 BYTEORDER = 'little'
+STRUCT_BYTEORDER = {'little': '<', 'big': '>'}[BYTEORDER]
 HEADER_CODES = {'super': 1, 'data': 2, 'global': 3}
 
 # Index corresponds to a code
@@ -150,11 +151,11 @@ class SeriesParameters:
 
     def __str__(self):
         msg = [
-            '==== Series Parameters ====',
+            'Series Parameters:',
             'File info: {}'.format(self.file_info),
             'Sampling frequency: {}'.format(self.sampling_frequency),
             'Number of samples: {}'.format(self.n_samples),
-            'Total delay: {} us'.format(self.total_delay),
+            'Total delay: {}'.format(self.total_delay),
             'Channel: {}'.format(self.channel),
             'Frequency: {}'.format(self.frequency),
             'Pulse length: {}'.format(self.pulse_length),
@@ -211,9 +212,6 @@ class SignalTimeSeries:
 
     def __str__(self):
         msg = [
-            '======================',
-            '== Time series info ==',
-            '======================',
             'Time mark: {}'.format(self.time_mark),
             self.parameters.__str__(),
             'Quadratures: {}'.format(self.quadratures)
@@ -384,7 +382,7 @@ def _raw2refined_parameters(raw_parameters: Dict[str, int],
     global_params = ExperimentParameters(
         sampling_frequency=sampling_frequency,
         n_samples=n_samples,
-        total_delay=total_delay,
+        total_delay=units.TimeUnit(total_delay, 'us'),
     )
     parameters = SeriesParameters(
         file_info=file_info,
@@ -455,7 +453,7 @@ def _refined2raw_parameters(time_mark: datetime, refined_parameters: SeriesParam
     else:
         long_pulse_len = 0
 
-    raw_parameters['first_delay'] = refined_parameters.total_delay \
+    raw_parameters['first_delay'] = int(refined_parameters.total_delay['us']) \
                                     + raw_parameters['offset_st1'] \
                                     + long_pulse_len \
                                     - DELAY_FORMULA_CONSTANT
@@ -780,9 +778,12 @@ class DataFileReader(DataFileIO):
 
         quadratures = np.fromfile(self.stream, dtype=dtype, count=1)
 
+        result = np.array(quadratures['quad_Q'][0]).astype(np.complex64)
+
         # Invert Q quadrature to compensate for IISR demodulation
-        return np.array(quadratures['quad_I'][0]) - 1j * np.array(
-            quadratures['quad_Q'][0])
+        np.multiply(result, -1j, out=result)
+        result += np.array(quadratures['quad_I'][0])
+        return result
 
     def _read_raw_parameters_block(self, parameters: dict, block_length: int):
         """
@@ -794,17 +795,14 @@ class DataFileReader(DataFileIO):
             Length of block in bytes.
         """
         # Each parameter represented by 2 bytes for code and 2 bytes for value
-        n_parameters = block_length // 4
-        for _ in range(0, n_parameters):
-            bin_code = self.stream.read(2)
-            bin_param = self.stream.read(2)
+        n_bytes = 4
+        n_parameters = block_length // n_bytes
 
-            if bin_code == b'' or bin_param == b'':
-                raise ReadError('EOF when trying to read parameter')
+        piece = self.stream.read(n_parameters * n_bytes)
+        # Unpack 2 x n_params for codes and values
+        unpacked_piece = struct.unpack('<{}H'.format(n_parameters * 2), piece)
 
-            code = int.from_bytes(bin_code, byteorder=BYTEORDER)
-            value = int.from_bytes(bin_param, byteorder=BYTEORDER)
-
+        for code, value in zip(unpacked_piece[::2], unpacked_piece[1::2]):
             # Searching for parameter code in pre-defined tuple
             if code in parameters:
                 raise RuntimeError('Parameters dictionary already has code {}'.format(code))
@@ -1026,8 +1024,8 @@ def read_files_by(read_type: str, paths: Iterable[Path], only_headers: bool = Fa
     file_paths = _collect_valid_file_paths(paths)
 
     def _generator():
-        for path in file_paths:
-            logging.info('Process file: {}'.format(path))
+        for path_num, path in enumerate(file_paths, 1):
+            logging.info('[{}/{}] Process file: {}'.format(path_num, len(file_paths), path))
 
             with open_data_file(path, only_headers=only_headers,
                                 series_selector=series_selector) as data_reader:

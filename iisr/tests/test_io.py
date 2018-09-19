@@ -57,7 +57,8 @@ def get_test_parameters(n_samples=2048, freq=155.5, pulse_len=700,
                         antenna_end='st1', file_info=None) -> io.SeriesParameters:
     if file_info is None:
         file_info = get_file_info()
-    global_params = io.ExperimentParameters(Frequency(sampling_freq, 'MHz'), n_samples, total_delay)
+    global_params = io.ExperimentParameters(Frequency(sampling_freq, 'MHz'), n_samples,
+                                            TimeUnit(total_delay, 'us'))
     test_parameters = io.SeriesParameters(
         file_info, global_params, Channel(channel), Frequency(freq, 'MHz'),
         TimeUnit(pulse_len, 'us'), phase_code, antenna_end=antenna_end
@@ -329,10 +330,10 @@ class TestRead(TestCase):
                 series = next(reader.read_series())
             self.assertIsInstance(series.time_mark, datetime)
             self.assertIsInstance(series.parameters, io.SeriesParameters)
-            self.assertIsInstance(series.quadratures, np.ndarray)
-
             self.assertEqual(series.time_mark, test_series_list[0].time_mark)
             self.assertEqual(series.parameters, test_series_list[0].parameters)
+
+            self.assertIsInstance(series.quadratures, np.ndarray)
             np.testing.assert_almost_equal(series.quadratures, test_series_list[0].quadratures)
 
     def test_read_with_selector(self):
@@ -428,7 +429,7 @@ class TestWriteRead(TestCase):
         self.assertEqual(time_mark, series.time_mark)
 
         # Quadratures
-        self.assertEqual(test_quadratures.size, series.quadratures.size)
+        self.assertEqual(len(test_quadratures), len(series.quadratures))
         np.testing.assert_equal(test_quadratures, series.quadratures)
 
         # Check test options against read options

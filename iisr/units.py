@@ -45,7 +45,7 @@ class Unit:
 
         self._value = value
         self._unit = unit
-        self._ref_unit = sorted(self.available_units.keys())[0]
+        self._ref_unit = next(iter(self.available_units.keys()))
 
     def __getitem__(self, unit: str) -> Union[float, np.ndarray]:
         """Return values in the given unit.
