@@ -9,12 +9,13 @@ import sys
 from pathlib import Path
 import configparser
 from iisr.utils import DATE_FMT
+from iisr import IISR_PATH
 
 
-DEFAULT_CONFIG = Path(__file__).parent.parent / 'general_config.ini'
+DEFAULT_CONFIG = IISR_PATH / 'general_config.ini'
 config = configparser.ConfigParser()
 config.read(str(DEFAULT_CONFIG))
-CONFIG_MAIN_FOLDER = Path(config['Common']['path_to_output_storage'])
+CONFIG_MAIN_FOLDER = IISR_PATH / Path(config['Common']['path_to_output_storage'])
 if not CONFIG_MAIN_FOLDER.exists():
     CONFIG_MAIN_FOLDER.mkdir()
 CONFIG_MAIN_FOLDER = CONFIG_MAIN_FOLDER.resolve()

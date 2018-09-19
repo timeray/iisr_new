@@ -13,7 +13,6 @@ config = {
     'packages': ['iisr'],
     'scripts': [],
     'name': 'iisr',
-    'install_requires': ['numpy'],
 }
 
-setup(**config, install_requires=['numpy'])
+setup(install_requires=['numpy', 'scipy'], **config)
