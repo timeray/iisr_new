@@ -1,18 +1,14 @@
 import itertools as it
-import json
-import copy
-import warnings
-from scipy import signal
 from collections import defaultdict
 from datetime import datetime, date, timedelta
 
 import numpy as np
-from typing import List, TextIO, Dict, Sequence, Tuple
+from scipy import signal
+from typing import List, TextIO, Dict, Sequence, Tuple, Generator, Iterator, Any
 
-from iisr.representation import CHANNELS, Channel
-from iisr.preprocessing.representation import HandlerResult, Handler
-from iisr.io import SeriesParameters, ExperimentParameters
-from iisr.representation import ReprJSONEncoder, ReprJSONDecoder
+from iisr.io import SeriesParameters, ExperimentParameters, TimeSeriesPackage
+from iisr.preprocessing.representation import HandlerResult, Handler, ResultParameters, Supervisor
+from iisr.representation import Channel
 from iisr.units import Frequency, TimeUnit, Distance
 from iisr.utils import TIME_FMT, DATE_FMT, central_time
 
@@ -95,21 +91,16 @@ def calc_distance(delays: TimeUnit) -> Distance:
     return Distance(delays['us'] * 0.15, 'km')
 
 
-class ResultParameters:
-    pass
-
-
 class ActiveParameters(ResultParameters):
-    params_to_save = ['sampling_frequency', 'total_delay', 'n_samples', 'channels', 'pulse_type',
-                      'frequency', 'pulse_length', 'phase_code']
-    header_n_params_key = 'params_json_length'
+    params_to_save = ['sampling_frequency', 'total_delay', 'n_samples', 'channels_set',
+                      'pulse_type', 'frequency', 'pulse_length', 'phase_code']
 
     def __init__(self, global_parameters: ExperimentParameters, channels: List[Channel],
                  pulse_type: str, frequency: Frequency, pulse_length: TimeUnit, phase_code: int):
         self.global_parameters = global_parameters
 
         if not channels:
-            raise ValueError('Empty channels')
+            raise ValueError('Empty channels_set')
 
         for i, ch in enumerate(channels):
             if isinstance(ch, int):
@@ -135,12 +126,6 @@ class ActiveParameters(ResultParameters):
     def total_delay(self):
         return self.global_parameters.total_delay
 
-    def __eq__(self, other: 'ActiveParameters'):
-        for name in self.params_to_save:
-            if getattr(self, name) != getattr(other, name):
-                return False
-        return True
-
     @property
     def delays(self) -> TimeUnit:
         if self._delays is None:
@@ -151,29 +136,9 @@ class ActiveParameters(ResultParameters):
     def distance(self) -> Distance:
         return calc_distance(self.delays)
 
-    def save_txt(self, file: TextIO):
-        params = {}
-        for name in self.params_to_save:
-            if not hasattr(self, name):
-                raise ValueError('Unexpected parameter {}'.format(name))
-            params[name] = getattr(self, name)
-
-        dumped_params = json.dumps(params, indent=True, cls=ReprJSONEncoder)
-        file.write('{} {}\n'.format(self.header_n_params_key, len(dumped_params)))
-        file.write(dumped_params)
-        file.write('\n')
-
     @classmethod
     def load_txt(cls, file: TextIO):
-        start_pos = file.tell()
-        header = file.readline()
-        if not header.startswith(cls.header_n_params_key):
-            warnings.warn('File has no header parameters')
-            file.seek(start_pos)
-            return
-
-        json_length = int(header.split()[1]) + 1  # 1 for last '\n'
-        params = json.loads(file.read(json_length), cls=ReprJSONDecoder)
+        params = cls.read_params_from_txt(file)
         global_params = ExperimentParameters(params.pop('sampling_frequency'),
                                              params.pop('n_samples'),
                                              params.pop('total_delay'))
@@ -257,13 +222,13 @@ class ActiveResult(HandlerResult):
             time_marks: Sorted array of datetimes.
             power: Dictionary (key for each channel) of power profiles.
                 Each profiles should have shape [len(time_marks), n_samples].
-            coherence: Coherence between channels. Complex values.
+            coherence: Coherence between channels_set. Complex values.
                 Shape [len(time_marks), n_samples].
         """
         if power is not None:
             if sorted(power.keys()) != parameters.channels:
                 raise AssertionError('Channels in power dictionary must be identical '
-                                     'to channels in parameters object')
+                                     'to channels_set in parameters object')
 
             for pwr in power.values():
                 if len(time_marks) != len(pwr):
@@ -271,7 +236,7 @@ class ActiveResult(HandlerResult):
 
         if coherence is not None:
             if len(time_marks) != len(coherence):
-                raise ValueError('Length of time_marks and all power arrays must be equal')
+                raise ValueError('Length of time_marks and all coherence arrays must be equal')
 
             if not np.iscomplexobj(coherence):
                 raise ValueError('Expect coherence to be complex valued')
@@ -470,171 +435,75 @@ class ActiveResult(HandlerResult):
 class ActiveHandler(Handler):
     """Abstract class for active processing"""
     valid_pulse_type = NotImplemented
-    valid_band_type = NotImplemented
 
     def preproc_quads(self, quadratures: np.ndarray) -> np.ndarray:
         return NotImplemented
 
-    def __init__(self, n_fft=None, h_step=None, eval_power=True, eval_coherence=False):
+    def __init__(self, global_parameters, channels, pulse_length, frequency, phase_code,
+                 n_fft=None, h_step=None, eval_power=True, eval_coherence=False):
+        self.global_parameters = global_parameters
+
+        self.channels = sorted(channels)
+        self.pulse_length = pulse_length
+        self.frequency = frequency
+        self.phase_code = phase_code
+
         self.nfft = n_fft
         self.h_step = h_step
 
         self.eval_power = eval_power
         self.eval_coherence = eval_coherence
 
-        # Channels that correspond to the pulse type
-        valid_channels = sorted([ch for ch in CHANNELS if ch.pulse_type == self.valid_pulse_type])
-        if len(valid_channels) != 2:
-            raise AssertionError('Expect 2 channels, but {} are given'.format(len(valid_channels)))
-        self.adjacent_channels = {valid_channels[0]: valid_channels[1],
-                                  valid_channels[1]: valid_channels[0]}
-
-        self.valid_input_params = None
-        self.actual_input_params = None
-        self.time_marks = None
-        self.power = None
-        self.coherence = None
-
-        self.await_input = None
-
-        self.reset_buffers()
-
-    def reset_buffers(self):
-        self.valid_input_params = set()
-        self.actual_input_params = set()
         self.time_marks = []
         self.power = defaultdict(list) if self.eval_power else None
         self.coherence = [] if self.eval_coherence else None
 
-        self.await_input = None
-
-    def validate(self, params: SeriesParameters) -> bool:
-        """Check if parameters correspond to the handler.
-
-        Args:
-            params: Parameters to validate.
-
-        Returns:
-            valid: True if parameters match.
-        """
-        # If not initialized
-        if not self.valid_input_params and params.pulse_type == self.valid_pulse_type:
-            return True
-        # If initialized
-        elif params in self.valid_input_params:
-            return True
-        else:
-            return False
-
-    def _get_adjacent_params(self, params: SeriesParameters) -> SeriesParameters:
-        """Return params with adjacent channel
-
-        Args:
-            params: Input parameter.
-
-        Returns:
-            adjacent_params: Adjacent parameters.
-
-        """
-        adjacent_params = copy.deepcopy(params)
-        adjacent_params.channel = self.adjacent_channels[params.channel]
-        return adjacent_params
-
-    def _process(self, time_marks: np.ndarray, quadratures: Dict[Channel, np.ndarray]):
-        """Function to evaluate power and coherence when all channels received"""
-        self.time_marks.append(central_time(time_marks))
-        channels = sorted(quadratures.keys())
-
-        if self.eval_power:
-            for ch in channels:
-                self.power[ch].append(self.calc_power(quadratures[ch]))
-
-        if self.eval_coherence:
-            if sorted(channels) != sorted(self.adjacent_channels):
-                raise EvalCoherenceError('Cannot evaluate coherence: incorrect channels '
-                                         '(expected {} got {})'
-                                         ''.format(self.adjacent_channels, channels))
-
-            coherence = self.calc_coherence(quadratures[channels[0]], quadratures[channels[1]])
-            self.coherence.append(coherence)
-
-    def process(self, params: SeriesParameters, time_marks: np.ndarray, quadratures: np.ndarray):
-        # Check that parameters are valid
-        if not self.validate(params):
-            raise ValueError('Given parameters are invalid.')
-
-        # If empty - initialize
-        if not self.actual_input_params:
-            self.valid_input_params.add(params)
-            self.valid_input_params.add(self._get_adjacent_params(params))
-
-        if params not in self.actual_input_params:
-            self.actual_input_params.add(params)
-
-        if len(quadratures.shape) != 2:
-            raise ValueError('Input quadratures should have shape (n_time_marks, n_samples)')
+    def process(self, time_marks: np.ndarray, quadratures: Dict[Channel, np.ndarray]):
+        for quads in quadratures.values():
+            if len(quads.shape) != 2:
+                raise ValueError('Input quadratures should have shape (n_time_marks, n_samples)')
 
         if len(time_marks) != len(quadratures):
             raise ValueError('Input quadratures should have shape (n_time_marks, n_samples)')
 
         # Preprocess quadratures
-        quadratures = self.preproc_quads(quadratures)
+        quadratures = {ch: self.preproc_quads(quadratures[ch]) for ch in self.channels}
 
-        # Join adjacent channels
-        channel = params.channel
-        if self.await_input is not None:
-            prev_params, prev_time_marks, prev_quadratures = self.await_input
-            prev_channel = prev_params.channel
-            # If adjacent channel did not appear
-            if channel == prev_channel:
-                self._process(prev_time_marks, {prev_channel: prev_quadratures})
-                self.await_input = params, time_marks, quadratures
-            # If adjacent channel appeared, process and reset await_input
-            elif channel == self.adjacent_channels[prev_channel]:
-                if not (time_marks == prev_time_marks).all():
-                    raise RuntimeError('Invalid time marks of adjacent channel {}'
-                                       ''.format(prev_channel))
-                joint_quads = {channel: quadratures, prev_channel: prev_quadratures}
-                self._process(time_marks, joint_quads)
-                self.await_input = None
-            else:
-                raise RuntimeError('Invalid input parameters (expect same or adjacent channels)')
-        else:
-            self.await_input = params, time_marks, quadratures
+        # Evaluate quantities
+        self.time_marks.append(central_time(time_marks))
+
+        if self.eval_power:
+            for ch in self.channels:
+                self.power[ch].append(self.calc_power(quadratures[ch]))
+
+        if self.eval_coherence:
+            quadratures_channels = sorted(quadratures.keys())
+            if self.channels != quadratures_channels:
+                raise EvalCoherenceError('Cannot evaluate coherence: incorrect channels '
+                                         '(expected {} got {})'
+                                         ''.format(self.channels, quadratures_channels))
+
+            coherence = self.calc_coherence_coef(quadratures[self.channels[0]],
+                                                 quadratures[self.channels[1]])
+            self.coherence.append(coherence)
 
     def finish(self) -> ActiveResult:
-        """Output results and free memory."""
-        # Finalize all computations (that may arise, because we always wait for adjacent channel)
-        if self.await_input is not None:
-            last_params, last_time_marks, last_quadratures = self.await_input
-            self._process(last_time_marks, {last_params.channel: last_quadratures})
-
+        """Output results"""
         # Gather all parameters
-        # Expect 2 adjacent channels of same band_type or 1 channel of band_type
-        self.actual_input_params = list(self.actual_input_params)
-        assert len(self.actual_input_params) == 2 or len(self.actual_input_params) == 1
+        global_params = self.global_parameters
+        channels = self.channels
 
-        if len(self.actual_input_params) == 2:
-            test_params = SeriesParameters.REFINED_PARAMETERS - {'channel'}
-            for param_name in test_params:
-                assert getattr(self.actual_input_params[0], param_name) \
-                       == getattr(self.actual_input_params[1], param_name), param_name
-
-        global_params = self.actual_input_params[0].global_parameters
-        channels = []
-        for params in self.actual_input_params:
-            channels.append(params.channel)
-        channels = sorted(channels)
-
-        phase_code = self.actual_input_params[0].phase_code
-        frequency = self.actual_input_params[0].frequency
-        pulse_length = self.actual_input_params[0].pulse_length
+        phase_code = self.phase_code
+        frequency = self.frequency
+        pulse_length = self.pulse_length
 
         active_params = ActiveParameters(global_params, channels, self.valid_pulse_type,
                                          frequency, pulse_length, phase_code)
 
         # Convert evaluated quantities to 2-d arrays
         if self.eval_power:
+            assert isinstance(self.power, dict)
+
             power = {}
             for ch in self.power:
                 power[ch] = np.stack(self.power[ch])
@@ -642,17 +511,17 @@ class ActiveHandler(Handler):
             power = None
 
         if self.eval_coherence:
+            assert isinstance(self.coherence, list)
+
             coherence = np.stack(self.coherence)
         else:
             coherence = None
         result = ActiveResult(active_params, self.time_marks, power, coherence)
-
-        self.reset_buffers()
         return result
 
 
 class LongPulseActiveHandler(ActiveHandler):
-    """Class for processing of narrowband series (default channels 0, 2)"""
+    """Class for processing of narrowband series (default channels_set 0, 2)"""
     valid_pulse_type = 'long'
 
     def __init__(self, *args, filter_half_band=25000, **kwargs):
@@ -663,8 +532,7 @@ class LongPulseActiveHandler(ActiveHandler):
     @property
     def filter(self) -> Dict[str, np.ndarray]:
         if self._filter is None:
-            any_input_params = next(iter(self.actual_input_params))
-            nyq = 0.5 * any_input_params.sampling_frequency['Hz']
+            nyq = 0.5 * self.global_parameters.sampling_frequency['Hz']
             crit_norm_freq = self.filter_half_band / nyq
 
             filt = signal.butter(7, crit_norm_freq)  # type: Tuple[np.ndarray, np.ndarray]
@@ -678,30 +546,27 @@ class LongPulseActiveHandler(ActiveHandler):
 
 
 class ShortPulseActiveHandler(ActiveHandler):
-    """Class for processing of wideband series (default channels 1, 3)"""
+    """Class for processing of wideband series (default channels_set 1, 3)"""
     valid_pulse_type = 'short'
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, global_parameters, channels, pulse_length, frequency, phase_code,
+                 n_fft=None, h_step=None, eval_power=True, eval_coherence=False):
+        super().__init__(global_parameters, channels, pulse_length, frequency, phase_code,
+                         n_fft, h_step, eval_power, eval_coherence)
         self._code = None
         self._is_noise = None
 
     @property
     def is_noise(self):
         if self._is_noise is None:
-            any_input_params = next(iter(self.actual_input_params))
-            phase_code = any_input_params.phase_code
-            pulse_len = any_input_params.pulse_length['us']
-            self._is_noise = (phase_code == 0) and (int(pulse_len) == 0)
+            self._is_noise = (self.phase_code == 0) and (int(self.pulse_length['us']) == 0)
         return self._is_noise
 
     @property
     def code(self):
         if self._code is None:
-            any_input_params = next(iter(self.actual_input_params))
-            dlength = any_input_params.pulse_length['us'] \
-                      * any_input_params.sampling_frequency['MHz']
-            self._code = square_barker(int(dlength), any_input_params.phase_code)
+            dlength = self.pulse_length['us'] * self.global_parameters.sampling_frequency['MHz']
+            self._code = square_barker(int(dlength), self.phase_code)
         return self._code
 
     def preproc_quads(self, quadratures: np.ndarray, axis=1) -> np.ndarray:
@@ -711,3 +576,110 @@ class ShortPulseActiveHandler(ActiveHandler):
             return np.apply_along_axis(signal.correlate, axis=axis, arr=quadratures,
                                        in2=self.code, mode='same')
 
+
+class ActiveSupervisor(Supervisor):
+    """Supervisor that manages active processing"""
+    def __init__(self, n_accumulation: int, timeout: timedelta,
+                 n_fft: int = None, h_step: float = None,
+                 eval_power: bool = True, eval_coherence: bool = False):
+        """
+
+        Args:
+            n_accumulation:
+            timeout:
+        """
+        super().__init__(timeout=timeout)
+        self.n_accumulation = n_accumulation
+        self.timeout = timeout
+        self.n_fft = n_fft
+        self.h_step = h_step
+
+        self.eval_power = eval_power
+        self.eval_coherence = eval_coherence
+
+    def aggregator(self, packages: Iterator[TimeSeriesPackage], drop_timeout_series: bool = True
+                   ) -> Generator[Tuple[SeriesParameters, np.ndarray, np.ndarray], Any, Any]:
+        """Aggregate series with equal parameters from packages.
+         Quadratures are accumulated to form 2-d arrays.
+
+        Args:
+            packages: Series packages iterator.
+            drop_timeout_series: Defines behaviour when timeout occur.
+                If True, drop already accumulated
+            series. If False, yield them.
+
+        Yields:
+            params: Unique parameters that corresponds to accumulated series.
+            time_marks: All consecutive time marks.
+            quadratures: 2-D Array of accumulated quadratures. Shape [n_accumulation x n_samples]
+        """
+        def to_arrays(marks, quads):
+            return np.array(marks, dtype=datetime), np.stack(quads)
+
+        timeout_filter = self.timeout_filter()
+        next(timeout_filter)  # Init coroutine
+
+        buffer = defaultdict(lambda: ([], []))
+        for package in packages:
+            if timeout_filter.send(package):
+                if not drop_timeout_series:
+                    # Yield what was accumulated
+                    for params, acc_marks, acc_quads in buffer:
+                        time_marks, quadratures = to_arrays(acc_marks, acc_quads)
+                        yield params, time_marks, quadratures
+
+                # Reset buffer
+                buffer = defaultdict(lambda: ([], []))
+
+            for time_series in package.time_series_list:
+                params = time_series.parameters
+                acc_marks, acc_quads = buffer[params]
+
+                # Append new record. If full, yield and reset buffer.
+                acc_marks.append(time_series.time_mark)
+                acc_quads.append(time_series.quadratures)
+
+                if len(acc_marks) >= self.n_accumulation:
+                    time_marks, quadratures = to_arrays(acc_marks, acc_quads)
+                    del buffer[params]
+                    yield params, time_marks, quadratures
+
+    def agg_params(self) -> Generator[ActiveParameters, SeriesParameters, None]:
+        unique_active_params = set()
+        while True:
+            params = yield ()
+
+
+    def init_handler(self, parameters: ActiveParameters):
+        ActiveParameters()
+        global_parameters
+        channels
+        pulse_length
+        frequency
+        phase_code
+        n_fft
+        h_step
+        eval_power
+        eval_coherence
+
+        common_kwargs = {
+            'global_parameters': parameters.global_parameters,
+            'eval_power': self.eval_power,
+            'eval_coherence': self.eval_coherence
+        }
+        if parameters.pulse_type == 'short':
+            return ShortPulseActiveHandler()
+        elif parameters.pulse_type == 'long':
+            return LongPulseActiveHandler(**common_kwargs)
+        else:
+            raise ValueError('Unknown pulse type')
+
+    def get_identifier(self, params):
+        """
+
+        Args:
+            params:
+
+        Returns:
+
+        """

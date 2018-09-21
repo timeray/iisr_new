@@ -90,7 +90,7 @@ def get_active_params(n_samples=2048):
         'pulse_type': 'short',
         'pulse_length': TimeUnit(700, 'us'),
         'frequency': Frequency(158, 'MHz'),
-        'channels': [Channel(1), Channel(3)],
+        'channels_set': [Channel(1), Channel(3)],
         'phase_code': 5,
     }
 
@@ -231,7 +231,7 @@ class TestNarrowbandActiveHander(TestCase):
                     + 1j * np.random.randn(n_acc, global_params.n_samples),
                 )
 
-        # Regular operation: 2 channels, calculate coherence and power
+        # Regular operation: 2 channels_set, calculate coherence and power
         for i in range(n_series):
             handler.process(params[0], time_marks[i], quadratures[channels[0]][i])
             handler.process(params[1], time_marks[i], quadratures[channels[1]][i])
@@ -271,7 +271,7 @@ class TestNarrowbandActiveHander(TestCase):
         with self.assertRaises(EvalCoherenceError):
             handler.process(params[0], time_marks[1], quadratures[channels[0]][1])
 
-        # Irregular operation: 4 channels, calculate power and coherence
+        # Irregular operation: 4 channels_set, calculate power and coherence
 
 
 if __name__ == '__main__':

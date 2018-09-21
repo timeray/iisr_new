@@ -53,7 +53,8 @@ class Channel:
         return self.value.__gt__(other.value)
 
 
-CHANNELS = [Channel(0), Channel(1), Channel(2), Channel(3)]
+ADJACENT_CHANNELS = {Channel(0): Channel(2), Channel(1): Channel(3),
+                     Channel(2): Channel(0), Channel(3): Channel(1)}
 
 JSON_REPR_TYPE_STR = '_repr_type'
 

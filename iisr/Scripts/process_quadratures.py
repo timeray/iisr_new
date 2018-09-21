@@ -67,7 +67,7 @@ def main(argv=None):
                         help='configuration file')
     parser.add_argument('--paths', nargs='*', help='paths to file or directory')
     parser.add_argument('-m', '--mode', help='mode of operation: incoherent, satellite or passive')
-    parser.add_argument('--channels', nargs='*', help='channels to process')
+    parser.add_argument('--channels_set', nargs='*', help='channels_set to process')
     parser.add_argument('--frequencies', nargs='*', help='frequencies to process')
     parser.add_argument('--n-accumulation', help='number of samples to accumulate')
     args = parser.parse_args(argv)
@@ -76,7 +76,7 @@ def main(argv=None):
     config.read(args.config_file)
 
     # Exchange config fields that where passed as command line arguments
-    for name in ['paths', 'mode', 'channels', 'frequencies', 'n_accumulation']:
+    for name in ['paths', 'mode', 'channels_set', 'frequencies', 'n_accumulation']:
         if getattr(args, name) is not None:
             config['Common'][name] = getattr(args, name)
 
@@ -85,7 +85,7 @@ def main(argv=None):
         paths=_parse_path(config['Common']['paths']),
         n_accumulation=int(config['Common']['n_accumulation']),
         mode=config['Common']['mode'],
-        channels=_parse_channels(config['Common']['channels']),
+        channels=_parse_channels(config['Common']['channels_set']),
         frequencies=_parse_frequency(config['Common']['frequencies']),
         pulse_length=_parse_time_units(config['Common']['pulse_length']),
         accumulation_timeout=int(config['Common']['accumulation_timeout']),

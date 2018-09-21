@@ -267,7 +267,7 @@ class TestSeriesSelector(TestCase):
 
         valid_params = {
             'frequencies': [Frequency(155.5, 'MHz'), Frequency(159.5, 'MHz')],
-            'channels': [Channel(0), Channel(2)],
+            'channels_set': [Channel(0), Channel(2)],
             'pulse_lengths': [TimeUnit(200, 'us'), TimeUnit(700, 'us')],
             'pulse_types': None,
         }
@@ -287,7 +287,7 @@ class TestSeriesSelector(TestCase):
 
         # Channel and type
         valid_params = {
-            'channels': [Channel(0), Channel(1)],
+            'channels_set': [Channel(0), Channel(1)],
             'pulse_types': 'long',
         }
         specific_filter = io.SeriesSelector(**valid_params)
@@ -339,7 +339,7 @@ class TestRead(TestCase):
     def test_read_with_selector(self):
         valid_params = {
             'frequencies': [Frequency(155.5, 'MHz')],
-            'channels': [Channel(0), Channel(2)],
+            'channels_set': [Channel(0), Channel(2)],
             'pulse_lengths': [TimeUnit(200, 'us')],
             'pulse_types': ['long'],
         }
@@ -369,7 +369,7 @@ class TestRead(TestCase):
             self.assertEqual(len(series_list), 2)
             for series in series_list:
                 self.assertEqual(series.parameters.frequency, valid_params['frequencies'][0])
-                self.assertIn(series.parameters.channel, valid_params['channels'])
+                self.assertIn(series.parameters.channel, valid_params['channels_set'])
                 self.assertEqual(series.parameters.pulse_length, valid_params['pulse_lengths'][0])
                 self.assertEqual(series.parameters.pulse_type, valid_params['pulse_types'][0])
 

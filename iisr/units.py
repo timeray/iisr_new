@@ -38,10 +38,13 @@ class Unit:
 
             value = value.copy().squeeze()  # Copy for later in-place operations
             self.size = value.size
+            self.shape = value.shape
         elif isinstance(value, (float, complex)):
             self.size = 1
+            self.shape = ()
         else:
             self.size = len(value)
+            self.shape = (self.size, )
 
         self._value = value
         self._unit = unit

@@ -510,7 +510,7 @@ class SeriesSelector:
         Args:
             start_time: Start time. All inputs before it will be rejected.
             stop_time: Stop time. All inputs after it will be rejected.
-            channels: Valid input channels.
+            channels: Valid input channels_set.
             pulse_types: Valid pulse types.
             frequencies: Valid frequencies.
             pulse_lengths: Valid pulse lengths.

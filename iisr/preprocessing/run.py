@@ -1,19 +1,16 @@
 """
-First-stage processing of IISR data.
+Pre processing stage processing of IISR data.
 """
-from collections import defaultdict
-from datetime import datetime, timedelta
-
 import logging
 import time
+from datetime import timedelta
 from pathlib import Path
 
-import numpy as np
-from typing import Iterator, List, Union, Generator, Tuple, Any
+from typing import List, Union
 
 from iisr import io
 from iisr.data_manager import DataManager
-from iisr.preprocessing.active import LongPulseActiveHandler, ShortPulseActiveHandler
+from iisr.preprocessing.active import ActiveSupervisor
 from iisr.representation import Channel
 from iisr.units import Frequency, TimeUnit
 
@@ -101,72 +98,6 @@ class LaunchConfig:
         return '\n'.join(msg)
 
 
-def aggregate_packages(packages: Iterator[io.TimeSeriesPackage],
-                       n_accumulation: int,
-                       timeout: timedelta = timedelta(minutes=5),
-                       drop_timeout_series: bool = True
-                       ) -> Generator[Tuple[io.SeriesParameters, np.ndarray, np.ndarray], Any, Any]:
-    """Aggregate series with equal parameters from packages.
-     Quadratures are accumulated to form 2-d arrays.
-
-    Args:
-        packages: Series packages iterator.
-        n_accumulation: Number of accumulated series.
-        timeout: Maximum distance between 2 consecutive series.
-        drop_timeout_series: Defines behaviour when timeout occur. If True, drop already accumulated
-        series. If False, yield them.
-
-    Yields:
-        params: Unique parameters that corresponds to accumulated series.
-        time_marks: All consecutive time marks.
-        quadratures: 2-D Array of accumulated quadratures. Shape [n_accumulation x n_samples]
-    """
-
-    def to_arrays(marks, quads):
-        return np.array(marks, dtype=datetime), np.stack(quads)
-
-    # List of unique quadratures: keys - parameters, values - (time_marks, quadratures)
-    unique_list = defaultdict(lambda: ([], []))
-    prev_time_mark = None
-    for package in packages:
-        # Check for timeout
-        if prev_time_mark is None:
-            time_diff = timedelta(0)
-        else:
-            time_diff = package.time_mark - prev_time_mark
-
-        if time_diff > timeout:
-            if not drop_timeout_series:
-                # Yield what was accumulated
-                for params, acc_marks, acc_quads in unique_list:
-                    time_marks, quadratures = to_arrays(acc_marks, acc_quads)
-                    yield params, time_marks, quadratures
-
-            # Reset buffer
-            unique_list = defaultdict(lambda: ([], []))
-
-        elif time_diff < timedelta(0):
-            raise RuntimeError(
-                'New time mark is earlier than previous (new {}, prev {})'
-                ''.format(package.time_mark, prev_time_mark)
-            )
-
-        prev_time_mark = package.time_mark
-
-        for time_series in package.time_series_list:
-            params = time_series.parameters
-            acc_marks, acc_quads = unique_list[params]
-
-            # Append new record. If full, yield and reset buffer.
-            acc_marks.append(time_series.time_mark)
-            acc_quads.append(time_series.quadratures)
-
-            if len(acc_marks) >= n_accumulation:
-                time_marks, quadratures = to_arrays(acc_marks, acc_quads)
-                del unique_list[params]
-                yield params, time_marks, quadratures
-
-
 def run_processing(config: LaunchConfig):
     """
     Launch processing given configuration.
@@ -183,52 +114,32 @@ def run_processing(config: LaunchConfig):
     start_time = time.time()
     logging.info(config)
 
-    # Filter realizations for each time step by channels, frequencies and other options
+    # Filter realizations for each time step by channels_set, frequencies and other options
     filter_parameters = {}
     if config.frequencies is not None:
         filter_parameters['frequencies'] = config.frequencies
     if config.channels is not None:
-        filter_parameters['channels'] = config.channels
+        filter_parameters['channels_set'] = config.channels
     if config.pulse_length is not None:
         filter_parameters['pulse_lengths'] = config.pulse_length
 
-    # Initialize handlers based on options
+    series_filter = io.SeriesSelector(**filter_parameters)
+
+    # Initialize supervisor based on options
     if config.mode == 'incoherent':
-        handler_classes = [LongPulseActiveHandler, ShortPulseActiveHandler]
+        supervisor = ActiveSupervisor(config.n_accumulation, timeout=config.accumulation_timeout)
     elif config.mode == 'passive':
         raise NotImplementedError()
     else:
         raise ValueError('Unknown mode: {}'.format(config.mode))
 
-    handlers = []
-
-    # Pick series
-    series_filter = io.SeriesSelector(**filter_parameters)
-    with io.read_files_by('blocks', paths=config.paths,
-                          series_selector=series_filter) as generator:
-        # Group series to form arrays of length equal to accumulation duration, check for timeouts
-        accumulated_quadratures = aggregate_packages(generator,
-                                                     config.n_accumulation,
-                                                     timeout=config.accumulation_timeout)
-
-        # Pass arrays to handler
-        for params, time_marks, quadratures in accumulated_quadratures:
-            for handler in handlers:
-                if handler.validate(params):
-                    handler.process(params, time_marks, quadratures)
-                    break
-            else:
-                for handler_cls in handler_classes:
-                    handler = handler_cls()
-                    if handler.validate(params):
-                        handlers.append(handler)
-                        handler.process(params, time_marks, quadratures)
-                        break
+    # Process series
+    with io.read_files_by('blocks', paths=config.paths, series_selector=series_filter) as generator:
+        results = supervisor.process_packages(generator)
 
     # Gather results from handlers and save them
     manager = DataManager()
-    for handler in handlers:
-        result = handler.finish()
+    for result in results:
         manager.save_preprocessing_result(result)
 
     logging.info('Processing successful. Elapsed time: {:.0f} s'.format(time.time() - start_time))

@@ -5,7 +5,7 @@ from unittest import TestCase, main
 from typing import List
 
 from iisr import io
-from iisr.preprocessing.process import aggregate_packages
+from iisr.preprocessing.run import aggregate_packages
 from iisr.tests.test_io import get_test_signal_time_series, get_test_parameters
 
 
