@@ -3,7 +3,6 @@ Manages output files and results of processing.
 """
 from typing import IO
 
-from iisr.preprocessing.representation import HandlerResult
 import os
 import sys
 from pathlib import Path
@@ -43,7 +42,7 @@ class DataManager:
         elif not self.main_folder.is_dir():
             raise NotADirectoryError('{}'.format(self.main_folder))
 
-    def save_preprocessing_result(self, result: HandlerResult):
+    def save_preprocessing_result(self, result):
         """
         Save first stage processing results.
 

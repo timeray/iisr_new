@@ -119,7 +119,7 @@ def run_processing(config: LaunchConfig):
     if config.frequencies is not None:
         filter_parameters['frequencies'] = config.frequencies
     if config.channels is not None:
-        filter_parameters['channels_set'] = config.channels
+        filter_parameters['channels'] = config.channels
     if config.pulse_length is not None:
         filter_parameters['pulse_lengths'] = config.pulse_length
 

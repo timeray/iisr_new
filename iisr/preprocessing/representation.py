@@ -1,13 +1,13 @@
 import json
 import warnings
 from abc import ABCMeta, abstractmethod, abstractclassmethod
-from datetime import date, timedelta, datetime
-from scipy import fftpack
+from datetime import date, timedelta
 
 import numpy as np
-from typing import IO, List, TextIO, Union, Generator, Any, Iterator, Tuple, Sequence
+from scipy import fftpack
+from typing import IO, List, TextIO, Union, Generator, Any, Iterator
 
-from iisr.io import SeriesParameters, TimeSeriesPackage
+from iisr.io import TimeSeriesPackage
 from iisr.representation import ReprJSONEncoder, ReprJSONDecoder
 
 
@@ -32,7 +32,7 @@ class HandlerResult(metaclass=ABCMeta):
 class Handler(metaclass=ABCMeta):
     """Parent class for various types of first-stage processing."""
     @abstractmethod
-    def process(self, time_marks: np.ndarray, quadratures: Any):
+    def handle(self, time_marks: np.ndarray, quadratures: Any):
         """Processing algorithm"""
 
     @abstractmethod
@@ -98,6 +98,9 @@ class ResultParameters(metaclass=ABCMeta):
                 return False
         return True
 
+    def __hash__(self):
+        return hash(tuple(getattr(self, name) for name in self.params_to_save))
+
     @classmethod
     def read_params_from_txt(cls, file: TextIO):
         start_pos = file.tell()
@@ -128,42 +131,49 @@ class ResultParameters(metaclass=ABCMeta):
         file.write('\n')
 
 
+def timeout_filter(timeout) -> Generator[bool, TimeSeriesPackage, Any]:
+    """Coroutine to check if time difference between consequent packages exceeds timeout.
+
+    Yields:
+        is_timeout: If timeout occur at given package.
+    """
+    prev_time_mark = None
+    is_timeout = False
+
+    while True:
+        package = yield is_timeout  # type: TimeSeriesPackage
+
+        if prev_time_mark is None:
+            time_diff = timedelta(0)
+        else:
+            time_diff = package.time_mark - prev_time_mark
+
+        if time_diff > timeout:
+            is_timeout = True
+
+        elif time_diff < timedelta(0):
+            raise RuntimeError(
+                'New time mark is earlier than previous (new {}, prev {})'
+                ''.format(package.time_mark, prev_time_mark)
+            )
+
+        prev_time_mark = package.time_mark
+
+
 class Supervisor(metaclass=ABCMeta):
     """Supervisors are classes to manage data processing"""
-    def __init__(self, timeout: timedelta):
+    def __init__(self, timeout: timedelta, n_fft=None, h_step=None, narrow_filter_half_band=25000,
+                 eval_power=True, eval_coherence=False):
         self.timeout = timeout
-
-    def timeout_filter(self) -> Generator[bool, TimeSeriesPackage, Any]:
-        """Coroutine to check if time difference between consequent packages exceeds timeout.
-
-        Yields:
-            is_timeout: If timeout occur at given package.
-        """
-        prev_time_mark = None
-        is_timeout = False
-
-        while True:
-            package = yield is_timeout
-
-            if prev_time_mark is None:
-                time_diff = timedelta(0)
-            else:
-                time_diff = package.time_mark - prev_time_mark
-
-            if time_diff > self.timeout:
-                is_timeout = True
-
-            elif time_diff < timedelta(0):
-                raise RuntimeError(
-                    'New time mark is earlier than previous (new {}, prev {})'
-                    ''.format(package.time_mark, prev_time_mark)
-                )
-
-            prev_time_mark = package.time_mark
+        self.n_fft = n_fft,
+        self.h_step = h_step
+        self.narrow_filter_half_band = narrow_filter_half_band
+        self.eval_power = eval_power
+        self.eval_coherence = eval_coherence
 
     @abstractmethod
-    def aggregator(self, packages: Iterator[TimeSeriesPackage], drop_timeout_series: bool = True
-                   ) -> Generator[Tuple[SeriesParameters, np.ndarray, np.ndarray], Any, Any]:
+    def aggregator(self, packages: Iterator[TimeSeriesPackage],
+                   drop_timeout_series: bool = True) -> Generator:
         """Aggregate input packages to form numpy arrays"""
 
     @abstractmethod
@@ -177,18 +187,18 @@ class Supervisor(metaclass=ABCMeta):
         handlers = {}
         for params, time_marks, quadratures in self.aggregator(packages):
             # If no there is no handler for given parameters, create it
-            if params not in handlers:
+            if params in handlers:
+                handler = handlers[params]
+            else:
                 handler = self.init_handler(params)
                 handlers[params] = handler
-            else:
-                handler = handlers[params]
 
             # Process grouped series using handler
             handler.handle(time_marks, quadratures)
 
         # Get results
         results = []
-        for handler in handlers:
+        for handler in handlers.values():
             results.append(handler.finish())
 
         return results
