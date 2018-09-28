@@ -96,6 +96,16 @@ class Unit:
         # Raise error if underlying value is a numpy array
         return hash(self[self._ref_unit])
 
+    def __add__(self, other: 'Unit'):
+        ref_unit = self._ref_unit
+        new_value = self[ref_unit] + other[ref_unit]
+        return self.__class__(new_value, ref_unit)
+
+    def __sub__(self, other: 'Unit'):
+        ref_unit = self._ref_unit
+        new_value = self[ref_unit] - other[ref_unit]
+        return self.__class__(new_value, ref_unit)
+
 
 @register_unit
 class Frequency(Unit):

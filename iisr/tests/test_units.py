@@ -1,7 +1,9 @@
-from unittest import TestCase, main
-from iisr import units
-import numpy as np
 import json
+from unittest import TestCase, main
+
+import numpy as np
+
+from iisr import units
 
 
 def setup():
@@ -141,6 +143,21 @@ class TestUnits(TestCase):
             cls=units.UnitsJSONDecoder
         )
         self.assertEqual(arr_size1_time, decoded_time)
+
+    def test_arithmetic(self):
+        freq1 = units.Frequency(1, 'Hz')
+        freq2 = units.Frequency(1.002, 'kHz')
+        freq3 = units.Frequency(np.array([1., 2.]), 'MHz')
+        freq4 = units.Frequency(np.array([5., 6.]), 'kHz')
+
+        self.assertAlmostEqual((freq1 + freq2)['Hz'], 1003.)
+        self.assertAlmostEqual((freq1 - freq2)['Hz'], -1001.)
+
+        np.testing.assert_almost_equal((freq3 + freq4)['kHz'], np.array([1005., 2006.]))
+        np.testing.assert_almost_equal((freq3 - freq4)['kHz'], np.array([995., 1994.]))
+
+        np.testing.assert_almost_equal((freq1 + freq4)['Hz'], np.array([5001., 6001.]))
+        np.testing.assert_almost_equal((freq1 - freq4)['Hz'], np.array([-4999., -5999.]))
 
 
 if __name__ == '__main__':
