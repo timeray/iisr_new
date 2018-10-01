@@ -89,9 +89,11 @@ def main(argv=None):
         frequencies=_parse_frequency(config['Common']['frequencies']),
         pulse_length=_parse_time_units(config['Common']['pulse_length']),
         accumulation_timeout=int(config['Common']['accumulation_timeout']),
+        n_fft=int(config['Common']['n_fft']),
     )
     run_processing(launch_config)
 
 
 if __name__ == '__main__':
-    main()
+    config_file = IISR_PATH / 'passive_config.ini'
+    main(['-c', '{}'.format(str(config_file))])

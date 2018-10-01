@@ -67,14 +67,14 @@ def get_test_parameters(n_samples=2048, freq=155.5, pulse_len=700,
 
 
 def get_test_signal_time_series(time_mark=datetime(2015, 6, 7, 8, 9, 10, 11), test_params=None,
-                                **param_kwargs) -> io.SignalTimeSeries:
+                                **param_kwargs) -> io.TimeSeries:
     if test_params is None:
         test_params = get_test_parameters(**param_kwargs)
 
     quad_i = np.random.randint(-100, 100, test_params.n_samples)
     quad_q = np.random.randint(-100, 100, test_params.n_samples)
     quadratures = quad_i + 1j * quad_q
-    time_series = io.SignalTimeSeries(time_mark, test_params, quadratures)
+    time_series = io.TimeSeries(time_mark, test_params, quadratures)
     return time_series
 
 
@@ -106,7 +106,7 @@ def make_random_test_file(n_unique_series=2, n_time_marks=2, time_step_sec=1):
             quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
             quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
             quadratures = quad_i + 1j * quad_q
-            series = io.SignalTimeSeries(time_mark, parameters, quadratures)
+            series = io.TimeSeries(time_mark, parameters, quadratures)
             series_list.append(series)
 
     with tempfile.TemporaryDirectory() as temp_dirname:
@@ -359,7 +359,7 @@ class TestRead(TestCase):
                     test_quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
                     test_quadratures = test_quad_i + 1j * test_quad_q
 
-                    series = io.SignalTimeSeries(DEFAULT_DATETIME, param, test_quadratures)
+                    series = io.TimeSeries(DEFAULT_DATETIME, param, test_quadratures)
                     data_file.write(series)
 
             # Check if selector correct
@@ -378,7 +378,7 @@ class TestRead(TestCase):
             series_list = list(data_file)
         self.assertEqual(len(series_list), 100)
 
-        first_series = series_list[0]  # type: io.SignalTimeSeries
+        first_series = series_list[0]  # type: io.TimeSeries
         self.assertEqual(first_series.time_mark.year, 2015)
         self.assertEqual(first_series.time_mark.month, 6)
         self.assertEqual(first_series.time_mark.day, 6)
@@ -418,7 +418,7 @@ class TestWriteRead(TestCase):
             test_quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
             test_quadratures = test_quad_i + 1j * test_quad_q
 
-            test_series = io.SignalTimeSeries(time_mark, test_parameters, test_quadratures)
+            test_series = io.TimeSeries(time_mark, test_parameters, test_quadratures)
             with io.open_data_file(test_file_path, 'w') as writer:
                 writer.write(test_series)
 
@@ -448,7 +448,7 @@ class TestReadFiles(TestCase):
         with make_random_test_file() as (test_file_path, test_series_list):
             with io.read_files_by('series', test_file_path) as series_generator:
                 for series, test_series in zip(series_generator, test_series_list):
-                    self.assertIsInstance(series, io.SignalTimeSeries)
+                    self.assertIsInstance(series, io.TimeSeries)
                     self.assertEqual(series.time_mark, test_series.time_mark)
                     self.assertEqual(series.parameters, test_series.parameters)
                     np.testing.assert_array_equal(series.quadratures, test_series.quadratures)
@@ -459,7 +459,7 @@ class TestReadFiles(TestCase):
                 package = next(packages_generator)
                 self.assertIsInstance(package, io.TimeSeriesPackage)
                 for series in package:
-                    self.assertIsInstance(series, io.SignalTimeSeries)
+                    self.assertIsInstance(series, io.TimeSeries)
                     self.assertEqual(package.time_mark, series.time_mark)
 
 

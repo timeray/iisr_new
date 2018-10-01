@@ -10,17 +10,18 @@ DATE_FMT = '%Y-%m-%d'
 TIME_FMT = '%H:%M:%S'
 
 
-def central_time(sorted_dtimes: Sequence[datetime]) -> datetime:
+def central_time(dtimes: Sequence[datetime]) -> datetime:
     """Return central time of datetime array.
 
     Args:
-        sorted_dtimes: Sorted sequence of datetimes.
+        dtimes: Sequence of datetimes.
 
     Returns:
         central_time: Central time of given sequence.
     """
+    sorted_dtimes = sorted(dtimes)
     if len(sorted_dtimes) < 2:
-        raise ValueError('Input datetime array must have at least 2 elements')
+        return sorted_dtimes[0]
     if not isinstance(sorted_dtimes[0], datetime) or not isinstance(sorted_dtimes[-1], datetime):
         raise ValueError('Input sequence should be sequence of datetimes')
     return sorted_dtimes[0] + (sorted_dtimes[-1] - sorted_dtimes[0]) / 2

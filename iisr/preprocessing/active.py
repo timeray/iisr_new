@@ -7,7 +7,7 @@ from scipy import signal
 from typing import List, TextIO, Dict, Sequence, Tuple, Generator, Iterator, Any
 
 from iisr.io import SeriesParameters, ExperimentParameters, TimeSeriesPackage
-from iisr.preprocessing.representation import HandlerResult, Handler, ResultParameters, Supervisor,\
+from iisr.preprocessing.representation import HandlerResult, Handler, HandlerParameters, Supervisor,\
     timeout_filter
 from iisr.representation import Channel, CHANNELS_INFO, ADJACENT_CHANNELS
 from iisr.units import Frequency, TimeUnit, Distance
@@ -92,7 +92,7 @@ def calc_distance(delays: TimeUnit) -> Distance:
     return Distance(delays['us'] * 0.15, 'km')
 
 
-class ActiveParameters(ResultParameters):
+class ActiveParameters(HandlerParameters):
     params_to_save = ['sampling_frequency', 'total_delay', 'n_samples', 'channels',
                       'pulse_type', 'frequency', 'pulse_length', 'phase_code']
 
@@ -106,6 +106,9 @@ class ActiveParameters(ResultParameters):
         for i, ch in enumerate(channels):
             if isinstance(ch, int):
                 channels[i] = Channel(ch)
+
+            if ch.pulse_type != pulse_type:
+                raise ValueError('Input channels should have same pulse type as input pulse_type')
 
         self.channels = tuple(sorted(channels))
         self.pulse_type = pulse_type
@@ -144,52 +147,6 @@ class ActiveParameters(ResultParameters):
                                              params.pop('n_samples'),
                                              params.pop('total_delay'))
         return cls(global_params, **params)
-
-
-class QuantityParameters:
-    parameter_names = NotImplemented
-
-    def __eq__(self, other: 'PowerParams'):
-        for param in self.parameter_names:
-            if getattr(self, param) != getattr(other, param):
-                return False
-        return True
-
-    def __hash__(self):
-        return hash(tuple(getattr(self, param) for param in self.parameter_names))
-
-    def __str__(self):
-        params = (str(getattr(self, param)) for param in self.parameter_names)
-        return '{}({})'.format(self.__class__.__name__, ', '.join(params))
-
-    def __iter__(self):
-        return iter((getattr(self, param) for param in self.parameter_names))
-
-
-class PowerParams(QuantityParameters):
-    def __init__(self, channel: int, frequency: Frequency, pulse_length: TimeUnit):
-        self.channel = channel
-        self.frequency = frequency
-        self.pulse_length = pulse_length
-
-        self.parameter_names = ['channel', 'frequency', 'pulse_length']
-
-    @classmethod
-    def from_series_params(cls, parameters: SeriesParameters):
-        return cls(channel=parameters.channel, frequency=parameters.frequency,
-                   pulse_length=parameters.pulse_length)
-
-
-class CoherenceParams(QuantityParameters):
-    def __init__(self, frequency: Frequency, pulse_length: TimeUnit):
-        self.frequency = frequency
-        self.pulse_length = pulse_length
-
-        self.parameter_names = ['frequency', 'pulse_length']
-
-    @classmethod
-    def from_series_params(cls, parameters: SeriesParameters):
-        return cls(parameters.frequency,  parameters.pulse_length)
 
 
 def _parse_header(header: str, keys: List[str], types: List[type]) -> List:
@@ -435,11 +392,6 @@ class ActiveResult(HandlerResult):
 
 class ActiveHandler(Handler):
     """Abstract class for active processing"""
-    valid_pulse_type = NotImplemented
-
-    def preproc_quads(self, quadratures: np.ndarray) -> np.ndarray:
-        return NotImplemented
-
     def __init__(self, active_parameters: ActiveParameters,
                  n_fft=None, h_step=None, eval_power=True, eval_coherence=False):
         self.active_parameters = active_parameters
@@ -455,7 +407,11 @@ class ActiveHandler(Handler):
         self.power = defaultdict(list) if self.eval_power else None
         self.coherence = [] if self.eval_coherence else None
 
-    def handle(self, time_marks: np.ndarray, quadratures: Dict[Channel, np.ndarray]):
+    def preproc_quads(self, quadratures: np.ndarray) -> np.ndarray:
+        return NotImplemented
+
+    def handle(self, time_marks: np.ndarray, batch_params: Dict,
+               quadratures: Dict[Channel, np.ndarray]):
         for quads in quadratures.values():
             if len(quads.shape) != 2:
                 raise ValueError('Input quadratures should have shape (n_time_marks, n_samples)')
@@ -504,8 +460,6 @@ class ActiveHandler(Handler):
 
 class LongPulseActiveHandler(ActiveHandler):
     """Class for processing of narrowband series (default channels_set 0, 2)"""
-    valid_pulse_type = 'long'
-
     def __init__(self, active_parameters: ActiveParameters,
                  filter_half_band=25000, n_fft=None, h_step=None,
                  eval_power=True, eval_coherence=False):
@@ -531,8 +485,6 @@ class LongPulseActiveHandler(ActiveHandler):
 
 class ShortPulseActiveHandler(ActiveHandler):
     """Class for processing of wideband series (default channels_set 1, 3)"""
-    valid_pulse_type = 'short'
-
     def __init__(self, active_parameters: ActiveParameters,
                  n_fft=None, h_step=None, eval_power=True, eval_coherence=False):
         super().__init__(active_parameters, n_fft, h_step, eval_power, eval_coherence)
@@ -566,6 +518,7 @@ class ShortPulseActiveHandler(ActiveHandler):
 class ActiveSupervisor(Supervisor):
     """Supervisor that manages active processing"""
     AggQuadratures = Dict[Channel, np.ndarray]
+    AggYieldType = Tuple[ActiveParameters, np.ndarray, Dict, AggQuadratures]
 
     def __init__(self, n_accumulation: int, timeout: timedelta,
                  n_fft: int = None, h_step: float = None,
@@ -586,7 +539,7 @@ class ActiveSupervisor(Supervisor):
         self.eval_coherence = eval_coherence
 
     def aggregator(self, packages: Iterator[TimeSeriesPackage], drop_timeout_series: bool = True
-                   ) -> Generator[Tuple[ActiveParameters, np.ndarray, AggQuadratures], Any, Any]:
+                   ) -> Generator[AggYieldType, Any, Any]:
         """Aggregate series with equal parameters from packages.
          Quadratures are accumulated to form 2-d arrays.
 
@@ -602,13 +555,13 @@ class ActiveSupervisor(Supervisor):
             quadratures: 2-D Array of accumulated quadratures for each channel.
                 Array shape [n_accumulation x n_samples]
         """
-        def new_buffer() -> Dict[Tuple, Dict[Channel, Tuple]]:
+        UniqueParams = namedtuple('UniqueParams', ['frequency', 'pulse_length', 'pulse_type'])
+
+        def new_buffer() -> Dict[UniqueParams, Dict[Channel, Tuple]]:
             return defaultdict(lambda: defaultdict(lambda: ([], [])))
 
         def to_arrays(marks, quads):
             return np.array(marks, dtype=datetime), np.stack(quads)
-
-        UniqueParams = namedtuple('UniqueParams', ['frequency', 'pulse_length', 'pulse_type'])
 
         timeout_coroutine = timeout_filter(self.timeout)
         next(timeout_coroutine)  # Init coroutine
@@ -626,12 +579,13 @@ class ActiveSupervisor(Supervisor):
                 # Reset buffer
                 buffer = new_buffer()
 
-            for time_series in package.time_series_list:
-                params = time_series.parameters
-                pulse_type = params.pulse_type
-                channel = params.channel
-                frequency = params.frequency
-                pulse_length = params.pulse_length
+            for series in package.time_series_list:
+                global_parameters = series.parameters.global_parameters
+                pulse_type = series.parameters.pulse_type
+                channel = series.parameters.channel
+                frequency = series.parameters.frequency
+                pulse_length = series.parameters.pulse_length
+                phase_code = series.parameters.phase_code
 
                 unique_params = UniqueParams(frequency, pulse_length, pulse_type)
                 band_buf = buffer[unique_params]
@@ -639,11 +593,14 @@ class ActiveSupervisor(Supervisor):
                 acc_marks, acc_quads = band_buf[channel]
 
                 # Append new record. If full, yield and reset buffer.
-                acc_marks.append(time_series.time_mark)
-                acc_quads.append(time_series.quadratures)
+                acc_marks.append(series.time_mark)
+                acc_quads.append(series.quadratures)
 
                 if len(acc_marks) != self.n_accumulation:
                     continue
+                elif len(acc_marks) > self.n_accumulation:
+                    raise AssertionError('Number of elements in accumulated records '
+                                         'exceeds n_accumulation')
 
                 channels = list(band_buf.keys())
 
@@ -667,15 +624,16 @@ class ActiveSupervisor(Supervisor):
                 else:
                     raise AssertionError('Unexpected number of channels')
 
-                active_params = ActiveParameters(global_parameters=params.global_parameters,
+                active_params = ActiveParameters(global_parameters=global_parameters,
                                                  channels=channels,
                                                  pulse_type=pulse_type,
                                                  frequency=frequency,
                                                  pulse_length=pulse_length,
-                                                 phase_code=params.phase_code)
+                                                 phase_code=phase_code)
 
                 del buffer[unique_params]
-                yield active_params, time_marks, quadratures
+                batch_params = {}  # Not needed here
+                yield active_params, time_marks, batch_params, quadratures
 
     def init_handler(self, parameters: ActiveParameters):
         if parameters.pulse_type == 'short':

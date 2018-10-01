@@ -187,11 +187,11 @@ class SeriesParameters:
             return True
 
 
-class SignalTimeSeries:
+class TimeSeries:
     """
     Time series of sampled received signal.
     """
-    def __init__(self, time_mark, parameters, quadratures):
+    def __init__(self, time_mark: datetime, parameters: SeriesParameters, quadratures: np.ndarray):
         """
         Parameters
         ----------
@@ -229,7 +229,7 @@ class TimeSeriesPackage:
         Parameters
         ----------
         time_mark: datetime.datetime
-        time_series_list: list of SignalTimeSeries
+        time_series_list: list of TimeSeries
         """
         for series in time_series_list:
             if series.time_mark != time_mark:
@@ -725,7 +725,7 @@ class DataFileReader(DataFileIO):
                 quadratures = None
 
             # Create annotated signal time series (realization)
-            time_series = SignalTimeSeries(time_mark, series_parameters, quadratures)
+            time_series = TimeSeries(time_mark, series_parameters, quadratures)
             yield time_series
 
     def _read_header(self):
@@ -826,7 +826,7 @@ class DataFileWriter(DataFileIO):
                 return True
         return False
 
-    def write(self, series: SignalTimeSeries):
+    def write(self, series: TimeSeries):
         """Write series to IISR file stream."""
         raw_parameters, data_byte_length = _refined2raw_parameters(series.time_mark,
                                                                    series.parameters)

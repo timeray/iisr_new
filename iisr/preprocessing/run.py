@@ -11,6 +11,7 @@ from typing import List, Union
 from iisr import io
 from iisr.data_manager import DataManager
 from iisr.preprocessing.active import ActiveSupervisor
+from iisr.preprocessing.passive import PassiveSupervisor
 from iisr.representation import Channel
 from iisr.units import Frequency, TimeUnit
 
@@ -18,7 +19,7 @@ from iisr.units import Frequency, TimeUnit
 class LaunchConfig:
     def __init__(self, paths: List[Path], mode: str, n_accumulation: int, channels: List[Channel],
                  frequencies: List[Frequency] = None, pulse_length: List[TimeUnit] = None,
-                 accumulation_timeout: Union[int, timedelta] = 60):
+                 accumulation_timeout: Union[int, timedelta] = 60, n_fft: int = None):
         """
         Create launch configuration. Check if input arguments are valid.
 
@@ -38,6 +39,7 @@ class LaunchConfig:
             Pulse length (in us) that should be processed. If None process all lengths.
         accumulation_timeout: timedelta or int
             Maximum time in minutes between first and last accumulated samples.
+        n_fft: int
         """
         if isinstance(paths, str):
             paths = Path(paths)
@@ -84,6 +86,8 @@ class LaunchConfig:
             raise ValueError('Incorrect accumulation timeout: {}'
                              ''.format(accumulation_timeout))
 
+        self.n_fft = n_fft
+
     def __str__(self):
         msg = [
             'Launch configuration',
@@ -93,7 +97,8 @@ class LaunchConfig:
             'Channels: {}'.format(self.channels),
             'Frequencies: {} MHz'.format(self.frequencies),
             'Pulse lengths: {} us'.format(self.pulse_length),
-            'Accumulation timeout: {:.2f} s'.format(self.accumulation_timeout.total_seconds())
+            'Accumulation timeout: {:.2f} s'.format(self.accumulation_timeout.total_seconds()),
+            'FFT length: {}'.format(self.n_fft),
         ]
         return '\n'.join(msg)
 
@@ -129,7 +134,8 @@ def run_processing(config: LaunchConfig):
     if config.mode == 'incoherent':
         supervisor = ActiveSupervisor(config.n_accumulation, timeout=config.accumulation_timeout)
     elif config.mode == 'passive':
-        raise NotImplementedError()
+        supervisor = PassiveSupervisor(config.n_accumulation, config.n_fft,
+                                       timeout=config.accumulation_timeout)
     else:
         raise ValueError('Unknown mode: {}'.format(config.mode))
 

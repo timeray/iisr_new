@@ -5,7 +5,7 @@ from datetime import date, timedelta
 
 import numpy as np
 from scipy import fftpack
-from typing import IO, List, TextIO, Union, Generator, Any, Iterator
+from typing import IO, List, TextIO, Union, Generator, Any, Iterator, Tuple, Dict
 
 from iisr.io import TimeSeriesPackage
 from iisr.representation import ReprJSONEncoder, ReprJSONDecoder
@@ -32,7 +32,7 @@ class HandlerResult(metaclass=ABCMeta):
 class Handler(metaclass=ABCMeta):
     """Parent class for various types of first-stage processing."""
     @abstractmethod
-    def handle(self, time_marks: np.ndarray, quadratures: Any):
+    def handle(self, time_marks: np.ndarray, batch_params: Any, quadratures: Any):
         """Processing algorithm"""
 
     @abstractmethod
@@ -88,11 +88,11 @@ class Handler(metaclass=ABCMeta):
         return fft
 
 
-class ResultParameters(metaclass=ABCMeta):
+class HandlerParameters(metaclass=ABCMeta):
     params_to_save = NotImplemented
     header_n_params_key = 'params_json_length'
 
-    def __eq__(self, other: 'ResultParameters'):
+    def __eq__(self, other: 'HandlerParameters'):
         for name in self.params_to_save:
             if getattr(self, name) != getattr(other, name):
                 return False
@@ -172,12 +172,12 @@ class Supervisor(metaclass=ABCMeta):
         self.eval_coherence = eval_coherence
 
     @abstractmethod
-    def aggregator(self, packages: Iterator[TimeSeriesPackage],
-                   drop_timeout_series: bool = True) -> Generator:
+    def aggregator(self, packages: Iterator[TimeSeriesPackage], drop_timeout_series: bool = True
+                   ) -> Generator[Tuple[HandlerParameters, Any, Dict, Any], Any, Any]:
         """Aggregate input packages to form numpy arrays"""
 
     @abstractmethod
-    def init_handler(self, *args, **kwargs):
+    def init_handler(self, *args, **kwargs) -> Handler:
         """Initialize new handler"""
 
     def process_packages(self, packages: Generator) -> List[HandlerResult]:
@@ -185,16 +185,16 @@ class Supervisor(metaclass=ABCMeta):
         # Group series by parameters to n_acc, check for timeouts
 
         handlers = {}
-        for params, time_marks, quadratures in self.aggregator(packages):
+        for unique_params, time_marks, batch_params, quadratures in self.aggregator(packages):
             # If no there is no handler for given parameters, create it
-            if params in handlers:
-                handler = handlers[params]
+            if unique_params in handlers:
+                handler = handlers[unique_params]
             else:
-                handler = self.init_handler(params)
-                handlers[params] = handler
+                handler = self.init_handler(unique_params)
+                handlers[unique_params] = handler
 
             # Process grouped series using handler
-            handler.handle(time_marks, quadratures)
+            handler.handle(time_marks, batch_params, quadratures)
 
         # Get results
         results = []
