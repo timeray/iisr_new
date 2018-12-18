@@ -7,7 +7,7 @@ from typing import List, TextIO, Dict, IO, Iterator, Tuple, Generator, Any
 
 from iisr.io import FileInfo, TimeSeriesPackage, TimeSeries
 from iisr.preprocessing.representation import HandlerResult, Handler, HandlerParameters, \
-    Supervisor, timeout_filter
+    Supervisor, timeout_filter, HandlerBatch
 from iisr.representation import Channel
 from iisr.units import Frequency
 from iisr.utils import central_time
@@ -212,6 +212,13 @@ class PassiveTrackResult(HandlerResult):
         raise NotImplementedError
 
 
+class PassiveBatch(HandlerBatch):
+    def __init__(self, time_marks: np.ndarray, batch_params: Dict, quadratures: Dict):
+        self.time_marks = time_marks
+        self.batch_params = batch_params
+        self.quadratures = quadratures
+
+
 class PassiveHandler(Handler):
     def __init__(self, parameters: PassiveParameters, n_central, eval_coherence=True):
         self.parameters = parameters
@@ -265,8 +272,10 @@ class PassiveHandler(Handler):
 
         return cross_spectra_mean / np.sqrt(power_spectra1 * power_spectra2)
 
-    def handle(self, time_marks: List[np.ndarray], batch_params: Dict,
-               quadratures: PassiveAggQuadratures):
+    def handle(self, batch: PassiveBatch):
+        time_marks = batch.time_marks
+        quadratures = batch.quadratures
+
         # Arguments checks
         for channel_quads in quadratures.values():
             if len(channel_quads) != self.n_central:
@@ -379,10 +388,9 @@ class PassiveTrackHandler(PassiveHandler):
         # pass all frequencies
         self.band_masks = [np.ones(self.parameters.n_fft, dtype=bool)]
 
-    def handle(self, time_marks: List[np.ndarray], batch_params: Dict,
-               quadratures: PassiveAggQuadratures):
-        super().handle(time_marks, batch_params, quadratures)
-        self.central_frequencies.append(batch_params['central_frequency'])
+    def handle(self, batch):
+        super().handle(batch)
+        self.central_frequencies.append(batch.batch_params['central_frequency'])
 
     def finish(self):
         time_marks = np.array(self.time_marks, dtype=dtime.datetime)
@@ -512,11 +520,10 @@ class PassiveSupervisor(Supervisor):
                    ) -> Generator[AggYieldType, Any, Any]:
         """Aggregate series from packages into arrays, grouping them by parameters.
 
-        This function contain complicated logic to iterate over series. We know nothing about
-        upcoming series, so we should formulate grouping logic on fly.
+        This function contain complicated logic to iterate over series.
+        Since parameters of incoming series are unknown, grouping logic should be formulated on fly.
 
-        Quadratures in passive mode grouped by central frequencies and channel bands.
-        As order
+        Quadratures in passive mode grouped by observation frequencies and channel bands.
 
         Args:
             packages:
@@ -529,7 +536,7 @@ class PassiveSupervisor(Supervisor):
         band_dict = defaultdict(list)
         central_frequencies_dict = defaultdict(list)
         for (band_type, frequency), series_dict in self.groupby_band(packages):
-            # If cycle, yield
+            # If full frequency cycle was passed, yield
             if start_params == (band_type, frequency):
                 central_frequencies = central_frequencies_dict[band_type]
 

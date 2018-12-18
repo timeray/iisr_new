@@ -92,6 +92,7 @@ class LaunchConfig:
         msg = [
             'Launch configuration',
             '--------------------',
+            'Paths:\n{}'.format('\n'.join((str(path) for path in self.paths))),
             'Mode: {}'.format(self.mode),
             'Number of accumulated samples: {}'.format(self.n_accumulation),
             'Channels: {}'.format(self.channels),

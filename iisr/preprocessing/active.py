@@ -6,15 +6,15 @@ import numpy as np
 from scipy import signal
 from typing import List, TextIO, Dict, Sequence, Tuple, Generator, Iterator, Any
 
-from iisr.io import SeriesParameters, ExperimentParameters, TimeSeriesPackage
-from iisr.preprocessing.representation import HandlerResult, Handler, HandlerParameters, Supervisor,\
-    timeout_filter
-from iisr.representation import Channel, CHANNELS_INFO, ADJACENT_CHANNELS
+from iisr.io import ExperimentParameters, TimeSeriesPackage
+from iisr.preprocessing.representation import HandlerResult, Handler, HandlerParameters, \
+    Supervisor, timeout_filter, HandlerBatch
+from iisr.representation import Channel, ADJACENT_CHANNELS
 from iisr.units import Frequency, TimeUnit, Distance
 from iisr.utils import TIME_FMT, DATE_FMT, central_time
 
-__all__ = ['calc_delays', 'calc_distance', 'ActiveParameters', 'ActiveResult', 'PowerParams',
-           'CoherenceParams', 'LongPulseActiveHandler', 'ShortPulseActiveHandler',
+__all__ = ['calc_delays', 'delays2distance', 'ActiveParameters', 'ActiveResult',
+           'LongPulseActiveHandler', 'ShortPulseActiveHandler',
            'EvalCoherenceError', 'ReadingError', 'square_barker']
 
 
@@ -80,7 +80,7 @@ def calc_delays(sampling_frequency: Frequency, total_delay: TimeUnit, n_samples:
     return delays
 
 
-def calc_distance(delays: TimeUnit) -> Distance:
+def delays2distance(delays: TimeUnit) -> Distance:
     """Calculate distance using delays.
 
     Args:
@@ -138,11 +138,16 @@ class ActiveParameters(HandlerParameters):
 
     @property
     def distance(self) -> Distance:
-        return calc_distance(self.delays)
+        return delays2distance(self.delays)
 
     @classmethod
     def load_txt(cls, file: TextIO):
         params = cls.read_params_from_txt(file)
+
+        if params is None:
+            # No parameters recorded in file
+            return params
+
         global_params = ExperimentParameters(params.pop('sampling_frequency'),
                                              params.pop('n_samples'),
                                              params.pop('total_delay'))
@@ -390,6 +395,12 @@ class ActiveResult(HandlerResult):
         return cls(params, sorted(time_marks), power=power, coherence=coherence)
 
 
+class ActiveBatch(HandlerBatch):
+    def __init__(self, time_marks: np.ndarray, quadratures: Dict):
+        self.time_marks = time_marks
+        self.quadratures = quadratures
+
+
 class ActiveHandler(Handler):
     """Abstract class for active processing"""
     def __init__(self, active_parameters: ActiveParameters,
@@ -408,15 +419,17 @@ class ActiveHandler(Handler):
         self.coherence = [] if self.eval_coherence else None
 
     def preproc_quads(self, quadratures: np.ndarray) -> np.ndarray:
-        return NotImplemented
+        return quadratures
 
-    def handle(self, time_marks: np.ndarray, batch_params: Dict,
-               quadratures: Dict[Channel, np.ndarray]):
+    def handle(self, batch: ActiveBatch):
+        time_marks = batch.time_marks
+        quadratures = batch.quadratures
+
         for quads in quadratures.values():
             if len(quads.shape) != 2:
                 raise ValueError('Input quadratures should have shape (n_time_marks, n_samples)')
 
-        channels = sorted(quadratures.keys())
+        channels = tuple(sorted(quadratures.keys()))
 
         # Preprocess quadratures
         quadratures = {ch: self.preproc_quads(quadratures[ch]) for ch in channels}
@@ -429,10 +442,8 @@ class ActiveHandler(Handler):
                 self.power[ch].append(self.calc_power(quadratures[ch]))
 
         if self.eval_coherence:
-            if self.channels != channels:
-                raise EvalCoherenceError('Cannot evaluate coherence: incorrect channels '
-                                         '(expected {} got {})'
-                                         ''.format(self.channels, channels))
+            if len(channels) < 2:
+                raise EvalCoherenceError('Cannot evaluate coherence: expect two channels')
 
             coherence = self.calc_coherence_coef(quadratures[self.channels[0]],
                                                  quadratures[self.channels[1]])
@@ -488,24 +499,15 @@ class ShortPulseActiveHandler(ActiveHandler):
     def __init__(self, active_parameters: ActiveParameters,
                  n_fft=None, h_step=None, eval_power=True, eval_coherence=False):
         super().__init__(active_parameters, n_fft, h_step, eval_power, eval_coherence)
-        self._code = None
-        self._is_noise = None
 
-    @property
-    def is_noise(self):
-        if self._is_noise is None:
-            phase_code = self.active_parameters.phase_code
-            pulse_length_us = int(self.active_parameters.pulse_length['us'])
-            self._is_noise = (phase_code == 0) and (pulse_length_us == 0)
-        return self._is_noise
+        params = self.active_parameters
+        dlength = params.pulse_length['us'] * params.sampling_frequency['MHz']
+        self.is_noise = (params.phase_code == 0) and (int(dlength) == 0)
 
-    @property
-    def code(self):
-        if self._code is None:
-            params = self.active_parameters
-            dlength = params.pulse_length['us'] * params.sampling_frequency['MHz']
-            self._code = square_barker(int(dlength), params.phase_code)
-        return self._code
+        if self.is_noise:
+            self.code = None
+        else:
+            self.code = square_barker(int(dlength), params.phase_code)
 
     def preproc_quads(self, quadratures: np.ndarray, axis=1) -> np.ndarray:
         if self.is_noise:
@@ -518,22 +520,23 @@ class ShortPulseActiveHandler(ActiveHandler):
 class ActiveSupervisor(Supervisor):
     """Supervisor that manages active processing"""
     AggQuadratures = Dict[Channel, np.ndarray]
-    AggYieldType = Tuple[ActiveParameters, np.ndarray, Dict, AggQuadratures]
+    AggYieldType = Tuple[ActiveParameters, ActiveBatch]
 
     def __init__(self, n_accumulation: int, timeout: timedelta,
                  n_fft: int = None, h_step: float = None,
-                 eval_power: bool = True, eval_coherence: bool = False):
+                 eval_power: bool = True, eval_coherence: bool = False,
+                 narrow_filter_half_band=25000):
         """
 
         Args:
             n_accumulation:
             timeout:
         """
-        super().__init__(timeout=timeout)
         self.n_accumulation = n_accumulation
         self.timeout = timeout
         self.n_fft = n_fft
         self.h_step = h_step
+        self.narrow_filter_half_band = narrow_filter_half_band
 
         self.eval_power = eval_power
         self.eval_coherence = eval_coherence
@@ -624,30 +627,35 @@ class ActiveSupervisor(Supervisor):
                 else:
                     raise AssertionError('Unexpected number of channels')
 
-                active_params = ActiveParameters(global_parameters=global_parameters,
-                                                 channels=channels,
-                                                 pulse_type=pulse_type,
-                                                 frequency=frequency,
-                                                 pulse_length=pulse_length,
-                                                 phase_code=phase_code)
+                active_params = ActiveParameters(
+                    global_parameters=global_parameters,
+                    channels=channels,
+                    pulse_type=pulse_type,
+                    frequency=frequency,
+                    pulse_length=pulse_length,
+                    phase_code=phase_code
+                )
 
                 del buffer[unique_params]
-                batch_params = {}  # Not needed here
-                yield active_params, time_marks, batch_params, quadratures
+                yield active_params, ActiveBatch(time_marks, quadratures)
 
     def init_handler(self, parameters: ActiveParameters):
         if parameters.pulse_type == 'short':
-            return ShortPulseActiveHandler(active_parameters=parameters,
-                                           n_fft=self.n_fft,
-                                           h_step=self.h_step,
-                                           eval_power=self.eval_power,
-                                           eval_coherence=self.eval_coherence)
+            return ShortPulseActiveHandler(
+                active_parameters=parameters,
+                n_fft=self.n_fft,
+                h_step=self.h_step,
+                eval_power=self.eval_power,
+                eval_coherence=self.eval_coherence
+            )
         elif parameters.pulse_type == 'long':
-            return LongPulseActiveHandler(active_parameters=parameters,
-                                          filter_half_band=self.narrow_filter_half_band,
-                                          n_fft=self.n_fft,
-                                          h_step=self.h_step,
-                                          eval_power=self.eval_power,
-                                          eval_coherence=self.eval_coherence)
+            return LongPulseActiveHandler(
+                active_parameters=parameters,
+                filter_half_band=self.narrow_filter_half_band,
+                n_fft=self.n_fft,
+                h_step=self.h_step,
+                eval_power=self.eval_power,
+                eval_coherence=self.eval_coherence
+            )
         else:
             raise ValueError('Unknown pulse type')

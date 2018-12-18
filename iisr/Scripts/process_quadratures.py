@@ -8,7 +8,7 @@ import configparser
 import logging
 from pathlib import Path
 
-from iisr.preprocessing import LaunchConfig, run_processing
+from iisr.preprocessing.run import LaunchConfig, run_processing
 from iisr import IISR_PATH
 from iisr.representation import Channel
 from iisr.units import Frequency, TimeUnit
@@ -16,11 +16,11 @@ from typing import Callable, List
 
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(message)s')
-DEFAULT_CONFIG_FILE = IISR_PATH / 'pre_processing_config.ini'
+DEFAULT_CONFIG_FILE = IISR_PATH / 'iisr' / 'default_active_preprocessing.ini'
 
 description = """
-Manages the launch of first stage processing. Uses configuration file passed to -c 
-argument to set main processing options, or uses default configuration.
+Manages the launch of pre-processing. Uses configuration file passed to -c 
+argument to set main processing options, otherwise runs default configuration.
 """
 
 config = configparser.ConfigParser()
@@ -67,16 +67,17 @@ def main(argv=None):
                         help='configuration file')
     parser.add_argument('--paths', nargs='*', help='paths to file or directory')
     parser.add_argument('-m', '--mode', help='mode of operation: incoherent, satellite or passive')
-    parser.add_argument('--channels_set', nargs='*', help='channels_set to process')
+    parser.add_argument('--channels', nargs='*', help='channels to process')
     parser.add_argument('--frequencies', nargs='*', help='frequencies to process')
     parser.add_argument('--n-accumulation', help='number of samples to accumulate')
     args = parser.parse_args(argv)
 
     # Read given configuration file
-    config.read(args.config_file)
+    if not config.read(args.config_file):
+        raise FileNotFoundError('Wrong config file: ' + args.config_file)
 
     # Exchange config fields that where passed as command line arguments
-    for name in ['paths', 'mode', 'channels_set', 'frequencies', 'n_accumulation']:
+    for name in ['paths', 'mode', 'channels', 'frequencies', 'n_accumulation']:
         if getattr(args, name) is not None:
             config['Common'][name] = getattr(args, name)
 
@@ -95,5 +96,4 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    config_file = IISR_PATH / 'passive_config.ini'
-    main(['-c', '{}'.format(str(config_file))])
+    main()

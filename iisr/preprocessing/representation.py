@@ -5,7 +5,7 @@ from datetime import date, timedelta
 
 import numpy as np
 from scipy import fftpack
-from typing import IO, List, TextIO, Union, Generator, Any, Iterator, Tuple, Dict
+from typing import IO, List, TextIO, Union, Generator, Any, Iterator, Tuple
 
 from iisr.io import TimeSeriesPackage
 from iisr.representation import ReprJSONEncoder, ReprJSONDecoder
@@ -29,10 +29,14 @@ class HandlerResult(metaclass=ABCMeta):
         """Load results from list of files."""
 
 
+class HandlerBatch(metaclass=ABCMeta):
+    pass
+
+
 class Handler(metaclass=ABCMeta):
     """Parent class for various types of first-stage processing."""
     @abstractmethod
-    def handle(self, time_marks: np.ndarray, batch_params: Any, quadratures: Any):
+    def handle(self, batch: HandlerBatch):
         """Processing algorithm"""
 
     @abstractmethod
@@ -157,44 +161,41 @@ def timeout_filter(timeout) -> Generator[bool, TimeSeriesPackage, Any]:
                 ''.format(package.time_mark, prev_time_mark)
             )
 
+        else:
+            is_timeout = False
+
         prev_time_mark = package.time_mark
 
 
 class Supervisor(metaclass=ABCMeta):
-    """Supervisors are classes to manage data processing"""
-    def __init__(self, timeout: timedelta, n_fft=None, h_step=None, narrow_filter_half_band=25000,
-                 eval_power=True, eval_coherence=False):
-        self.timeout = timeout
-        self.n_fft = n_fft,
-        self.h_step = h_step
-        self.narrow_filter_half_band = narrow_filter_half_band
-        self.eval_power = eval_power
-        self.eval_coherence = eval_coherence
-
+    """Supervisor manages data processing for specific mode of operation"""
     @abstractmethod
-    def aggregator(self, packages: Iterator[TimeSeriesPackage], drop_timeout_series: bool = True
-                   ) -> Generator[Tuple[HandlerParameters, Any, Dict, Any], Any, Any]:
-        """Aggregate input packages to form numpy arrays"""
+    def aggregator(
+            self,
+            packages: Iterator[TimeSeriesPackage],
+            drop_timeout_series: bool = True
+    ) -> Generator[Tuple[HandlerParameters, HandlerBatch], Any, Any]:
+        """Aggregate input packages by parameters to create arrays of quadratures"""
 
     @abstractmethod
     def init_handler(self, *args, **kwargs) -> Handler:
         """Initialize new handler"""
 
-    def process_packages(self, packages: Generator) -> List[HandlerResult]:
+    def process_packages(self, packages: Iterator[TimeSeriesPackage]) -> List[HandlerResult]:
         """Process all packages from the generator to get list of results"""
         # Group series by parameters to n_acc, check for timeouts
 
         handlers = {}
-        for unique_params, time_marks, batch_params, quadratures in self.aggregator(packages):
+        for key_params, batch in self.aggregator(packages):
             # If no there is no handler for given parameters, create it
-            if unique_params in handlers:
-                handler = handlers[unique_params]
+            if key_params in handlers:
+                handler = handlers[key_params]
             else:
-                handler = self.init_handler(unique_params)
-                handlers[unique_params] = handler
+                handler = self.init_handler(key_params)
+                handlers[key_params] = handler
 
             # Process grouped series using handler
-            handler.handle(time_marks, batch_params, quadratures)
+            handler.handle(batch)
 
         # Get results
         results = []
