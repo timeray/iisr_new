@@ -617,7 +617,7 @@ class DataFileIO:
 class DataFileReader(DataFileIO):
     """Read binary data stream."""
     def __init__(self, stream: IO, file_info: FileInfo, series_selector: SeriesSelector = None,
-                 only_headers: bool = False):
+                 only_headers: bool = False, fix_time_lag_bug=True):
         """Create reader instance.
 
         Args:
@@ -626,12 +626,21 @@ class DataFileReader(DataFileIO):
             only_headers: If True return only annotation of time series,
                 leaving quadratures field of SignalTimeSeries instance as None. Defaults to False.
             series_selector: Filter for options. Defaults to None.
+            fix_time_lag_bug: Whether to fix known time bug - sometimes precise clock at IISR
+                got broken for a while, and local (+8 hours) coarse time is used. This option tries
+                to fix it, checking if time gap between two consecutive series is 8 hour ahead.
+                In some complicated cases this fix may be undesirable, so it can be turned off.
         """
         self.stream = stream
         self.file_info = file_info
         self._series = self._series_generator()
         self.selector = series_selector
         self.only_headers = only_headers
+        self.fix_time_lag_bug = fix_time_lag_bug
+        self._prev_time = None
+        self._time_lag_diff = None
+
+    time_diff_zero = timedelta()
 
     def read_series(self):
         yield from self._series
@@ -654,6 +663,47 @@ class DataFileReader(DataFileIO):
 
     def __iter__(self):
         return self._series
+
+    @staticmethod
+    def _time_diff_within_limits(time_diff: timedelta,
+                                 time_shift: timedelta,
+                                 limits: timedelta = timedelta(minutes=10)):
+        if time_shift + limits > abs(time_diff) > time_shift - limits:
+            return True
+        else:
+            return False
+
+    def _fix_time_bug(self, current_time_mark: datetime) -> datetime:
+        # During buggy period, new clock may tweak a little around 8 hour shift,
+        # so we search for time lag in the vicinity
+        if self._prev_time is None:
+            self._prev_time = current_time_mark
+            return current_time_mark
+
+        time_diff = current_time_mark - self._prev_time
+        new_time_mark = current_time_mark
+
+        # If in the normal mode
+        if self._time_lag_diff is None:
+            # Check if next time is about 8 hours ahead
+            if self._time_diff_within_limits(time_diff, time_shift=timedelta(hours=8)):
+                # Add 10ms such that new time_mark don't match previous time exactly
+                self._time_lag_diff = time_diff - timedelta(milliseconds=10)
+                new_time_mark -= self._time_lag_diff
+
+        # If within buggy period
+        else:
+            if time_diff > self.time_diff_zero:
+                new_time_mark -= self._time_lag_diff
+            elif self._time_diff_within_limits(time_diff, time_shift=timedelta(hours=8)):
+                # Return to normal operation
+                self._time_lag_diff = None
+            else:
+                raise RuntimeError('Unable to fix time bug: expected ~8 hour back shift, '
+                                   'when return to a normal mode')
+
+        self._prev_time = current_time_mark
+        return new_time_mark
 
     def _series_generator(self):
         """Read headers of iisr datafiles.
@@ -712,6 +762,10 @@ class DataFileReader(DataFileIO):
             # Form refined options
             time_mark, series_parameters = \
                 _raw2refined_parameters(raw_parameters, data_length, self.file_info)
+
+            # Check for 8h time-lag bag (see class documentation for details)
+            if self.fix_time_lag_bug:
+                time_mark = self._fix_time_bug(time_mark)
 
             # Check if time mark within the limits
             if self.selector is not None and not self.selector.validate_time_mark(time_mark):

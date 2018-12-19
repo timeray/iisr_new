@@ -267,7 +267,7 @@ class TestSeriesSelector(TestCase):
 
         valid_params = {
             'frequencies': [Frequency(155.5, 'MHz'), Frequency(159.5, 'MHz')],
-            'channels_set': [Channel(0), Channel(2)],
+            'channels': [Channel(0), Channel(2)],
             'pulse_lengths': [TimeUnit(200, 'us'), TimeUnit(700, 'us')],
             'pulse_types': None,
         }
@@ -287,7 +287,7 @@ class TestSeriesSelector(TestCase):
 
         # Channel and type
         valid_params = {
-            'channels_set': [Channel(0), Channel(1)],
+            'channels': [Channel(0), Channel(1)],
             'pulse_types': 'long',
         }
         specific_filter = io.SeriesSelector(**valid_params)
@@ -325,9 +325,10 @@ class TestSeriesSelector(TestCase):
 
 class TestRead(TestCase):
     def test_read(self):
-        with make_random_test_file() as (test_file_path, test_series_list):
-            with io.open_data_file(test_file_path) as reader:
-                series = next(reader.read_series())
+        with make_random_test_file() as (test_file_path, test_series_list), \
+                io.open_data_file(test_file_path) as reader:
+
+            series = next(reader.read_series())
             self.assertIsInstance(series.time_mark, datetime)
             self.assertIsInstance(series.parameters, io.SeriesParameters)
             self.assertEqual(series.time_mark, test_series_list[0].time_mark)
@@ -339,7 +340,7 @@ class TestRead(TestCase):
     def test_read_with_selector(self):
         valid_params = {
             'frequencies': [Frequency(155.5, 'MHz')],
-            'channels_set': [Channel(0), Channel(2)],
+            'channels': [Channel(0), Channel(2)],
             'pulse_lengths': [TimeUnit(200, 'us')],
             'pulse_types': ['long'],
         }
@@ -369,7 +370,7 @@ class TestRead(TestCase):
             self.assertEqual(len(series_list), 2)
             for series in series_list:
                 self.assertEqual(series.parameters.frequency, valid_params['frequencies'][0])
-                self.assertIn(series.parameters.channel, valid_params['channels_set'])
+                self.assertIn(series.parameters.channel, valid_params['channels'])
                 self.assertEqual(series.parameters.pulse_length, valid_params['pulse_lengths'][0])
                 self.assertEqual(series.parameters.pulse_type, valid_params['pulse_types'][0])
 
@@ -443,24 +444,104 @@ class TestWriteRead(TestCase):
         self.assertEqual(test_parameters.total_delay, series.parameters.total_delay)
 
 
+class TestDataFileReaderTimeBugFix(TestCase):
+    n_marks = 30
+    shift_start_idx = 10
+    shift_stop_idx = 20
+    expected_shift = 8
+
+    def _run_read(self, hours_shift, fix_time_bug):
+        with tempfile.TemporaryDirectory() as dirname:
+            test_file_path = Path(dirname) / DUMMY_FILE_NAME
+
+            # Create test options
+            n_samples = 64
+            test_parameters = get_test_parameters(channel=0, n_samples=n_samples)
+
+            minutes_shift = random.randint(-5, 5)  # +-5 minutes maximum
+
+            time_marks = [DEFAULT_DATETIME + timedelta(seconds=10 * i)
+                          for i in range(self.n_marks)]
+            for i in range(self.shift_start_idx, self.shift_stop_idx):
+                time_marks[i] += timedelta(hours=hours_shift, minutes=minutes_shift)
+
+            test_quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
+            test_quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
+            test_quadratures = test_quad_i + 1j * test_quad_q
+
+            test_series = []
+            for time_mark in time_marks:
+                test_series.append(io.TimeSeries(time_mark, test_parameters, test_quadratures))
+
+            with io.open_data_file(test_file_path, 'w') as writer:
+                for series in test_series:
+                    writer.write(series)
+
+            with open(str(test_file_path), 'rb') as file:
+                reader = io.DataFileReader(file, file_info=get_file_info(),
+                                           fix_time_lag_bug=fix_time_bug)
+                read_series = list(reader.read_series())
+
+            self.assertEqual(self.n_marks, len(read_series))
+        return test_series, read_series
+
+    def test_expected_shift(self):
+        test_series, read_series = self._run_read(hours_shift=self.expected_shift,
+                                                  fix_time_bug=True)
+
+        prev_rseries_time = read_series[0].time_mark
+        for series_num in range(1, self.n_marks):
+            rseries_time = read_series[series_num].time_mark
+            tseries_time = test_series[series_num].time_mark
+
+            msg = 'At series_num = {}'.format(series_num)
+
+            # After fixing of 8h shift bug, series should not decrease
+            self.assertLess(prev_rseries_time, rseries_time)
+
+            # Unshifted time marks stand still
+            if series_num < self.shift_start_idx or series_num >= self.shift_stop_idx:
+                self.assertEqual(rseries_time, tseries_time, msg=msg)
+
+            # Shifted time marks became unshifted
+            else:
+                time_diff = tseries_time - rseries_time
+                self.assertGreater(time_diff, timedelta(hours=self.expected_shift - 1), msg=msg)
+                self.assertLess(time_diff, timedelta(hours=self.expected_shift + 1), msg=msg)
+
+    def test_different_shift(self):
+        shift = 6
+        test_series, read_series = self._run_read(hours_shift=shift, fix_time_bug=True)
+
+        for tseries, rseries in zip(test_series, read_series):
+            self.assertEqual(tseries.time_mark, rseries.time_mark)
+
+    def test_fixing_turned_off(self):
+        test_series, read_series = self._run_read(hours_shift=self.expected_shift,
+                                                  fix_time_bug=False)
+
+        for tseries, rseries in zip(test_series, read_series):
+            self.assertEqual(tseries.time_mark, rseries.time_mark)
+
+
 class TestReadFiles(TestCase):
     def test_read_by_series(self):
-        with make_random_test_file() as (test_file_path, test_series_list):
-            with io.read_files_by('series', test_file_path) as series_generator:
-                for series, test_series in zip(series_generator, test_series_list):
-                    self.assertIsInstance(series, io.TimeSeries)
-                    self.assertEqual(series.time_mark, test_series.time_mark)
-                    self.assertEqual(series.parameters, test_series.parameters)
-                    np.testing.assert_array_equal(series.quadratures, test_series.quadratures)
+        with make_random_test_file() as (test_file_path, test_series_list),  \
+                io.read_files_by('series', test_file_path) as series_generator:
+            for series, test_series in zip(series_generator, test_series_list):
+                self.assertIsInstance(series, io.TimeSeries)
+                self.assertEqual(series.time_mark, test_series.time_mark)
+                self.assertEqual(series.parameters, test_series.parameters)
+                np.testing.assert_array_equal(series.quadratures, test_series.quadratures)
 
     def test_read_by_blocks(self):
-        with make_random_test_file() as (test_file_path, test_series):
-            with io.read_files_by('blocks', test_file_path) as packages_generator:
-                package = next(packages_generator)
-                self.assertIsInstance(package, io.TimeSeriesPackage)
-                for series in package:
-                    self.assertIsInstance(series, io.TimeSeries)
-                    self.assertEqual(package.time_mark, series.time_mark)
+        with make_random_test_file() as (test_file_path, test_series),  \
+                io.read_files_by('blocks', test_file_path) as packages_generator:
+            package = next(packages_generator)
+            self.assertIsInstance(package, io.TimeSeriesPackage)
+            for series in package:
+                self.assertIsInstance(series, io.TimeSeries)
+                self.assertEqual(package.time_mark, series.time_mark)
 
 
 class TestCollectPaths(TestCase):
@@ -483,19 +564,17 @@ class TestCollectPaths(TestCase):
 
 class TestOpenDataFile(TestCase):
     def test_input(self):
-        with self.assertRaises(ValueError):
-            with tempfile.TemporaryDirectory() as dirname:
-                path = Path(dirname) / DUMMY_FILE_NAME
-                with io.open_data_file(path, 'rb'):
-                    pass
+        with self.assertRaises(ValueError), tempfile.TemporaryDirectory() as dirname:
+            path = Path(dirname) / DUMMY_FILE_NAME
+            with io.open_data_file(path, 'rb'):
+                pass
 
     def test_read(self):
         with tempfile.TemporaryDirectory() as dirname:
             path = Path(dirname) / DUMMY_FILE_NAME
 
-            with self.assertRaises(FileNotFoundError):
-                with io.open_data_file(path, 'r'):
-                    pass
+            with self.assertRaises(FileNotFoundError), io.open_data_file(path, 'r'):
+                pass
 
             path.touch()
 
