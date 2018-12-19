@@ -445,10 +445,11 @@ class TestWriteRead(TestCase):
 
 
 class TestDataFileReaderTimeBugFix(TestCase):
-    n_marks = 30
-    shift_start_idx = 10
-    shift_stop_idx = 20
+    n_marks = 15
+    shift_start_idx = 5
+    shift_stop_idx = 10
     expected_shift = 8
+    channels = (0, 2)
 
     def _run_read(self, hours_shift, fix_time_bug):
         with tempfile.TemporaryDirectory() as dirname:
@@ -456,7 +457,10 @@ class TestDataFileReaderTimeBugFix(TestCase):
 
             # Create test options
             n_samples = 64
-            test_parameters = get_test_parameters(channel=0, n_samples=n_samples)
+            test_parameters = [
+                get_test_parameters(channel=ch, n_samples=n_samples)
+                for ch in self.channels
+            ]
 
             minutes_shift = random.randint(-5, 5)  # +-5 minutes maximum
 
@@ -471,7 +475,8 @@ class TestDataFileReaderTimeBugFix(TestCase):
 
             test_series = []
             for time_mark in time_marks:
-                test_series.append(io.TimeSeries(time_mark, test_parameters, test_quadratures))
+                for params in test_parameters:
+                    test_series.append(io.TimeSeries(time_mark, params, test_quadratures))
 
             with io.open_data_file(test_file_path, 'w') as writer:
                 for series in test_series:
@@ -482,7 +487,7 @@ class TestDataFileReaderTimeBugFix(TestCase):
                                            fix_time_lag_bug=fix_time_bug)
                 read_series = list(reader.read_series())
 
-            self.assertEqual(self.n_marks, len(read_series))
+            self.assertEqual(self.n_marks * len(self.channels), len(read_series))
         return test_series, read_series
 
     def test_expected_shift(self):
@@ -490,24 +495,29 @@ class TestDataFileReaderTimeBugFix(TestCase):
                                                   fix_time_bug=True)
 
         prev_rseries_time = read_series[0].time_mark
-        for series_num in range(1, self.n_marks):
-            rseries_time = read_series[series_num].time_mark
-            tseries_time = test_series[series_num].time_mark
+        for time_mark_num in range(1, self.n_marks):
+            for ch_num in range(len(self.channels)):
+                series_num = time_mark_num * len(self.channels) + ch_num
 
-            msg = 'At series_num = {}'.format(series_num)
+                rseries_time = read_series[series_num].time_mark
+                tseries_time = test_series[series_num].time_mark
 
-            # After fixing of 8h shift bug, series should not decrease
-            self.assertLess(prev_rseries_time, rseries_time)
+                msg = 'At time_mark_num = {}, ch_num = '.format(time_mark_num, ch_num)
 
-            # Unshifted time marks stand still
-            if series_num < self.shift_start_idx or series_num >= self.shift_stop_idx:
-                self.assertEqual(rseries_time, tseries_time, msg=msg)
+                # After fixing of 8h shift bug, series should not decrease
+                self.assertLess(prev_rseries_time, rseries_time)
 
-            # Shifted time marks became unshifted
-            else:
-                time_diff = tseries_time - rseries_time
-                self.assertGreater(time_diff, timedelta(hours=self.expected_shift - 1), msg=msg)
-                self.assertLess(time_diff, timedelta(hours=self.expected_shift + 1), msg=msg)
+                # Unshifted time marks stand still
+                if time_mark_num < self.shift_start_idx or time_mark_num >= self.shift_stop_idx:
+                    self.assertEqual(rseries_time, tseries_time, msg=msg)
+
+                # Shifted time marks became unshifted
+                else:
+                    time_diff = tseries_time - rseries_time
+                    self.assertGreater(time_diff, timedelta(hours=self.expected_shift - 1), msg=msg)
+                    self.assertLess(time_diff, timedelta(hours=self.expected_shift + 1), msg=msg)
+
+            prev_rseries_time = read_series[time_mark_num * len(self.channels)].time_mark
 
     def test_different_shift(self):
         shift = 6

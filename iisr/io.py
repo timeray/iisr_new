@@ -673,7 +673,8 @@ class DataFileReader(DataFileIO):
         else:
             return False
 
-    def _fix_time_bug(self, current_time_mark: datetime) -> datetime:
+    def _fix_time_bug(self, current_time_mark: datetime,
+                      expected_shift: timedelta = timedelta(hours=8)) -> datetime:
         # During buggy period, new clock may tweak a little around 8 hour shift,
         # so we search for time lag in the vicinity
         if self._prev_time is None:
@@ -686,16 +687,16 @@ class DataFileReader(DataFileIO):
         # If in the normal mode
         if self._time_lag_diff is None:
             # Check if next time is about 8 hours ahead
-            if self._time_diff_within_limits(time_diff, time_shift=timedelta(hours=8)):
+            if self._time_diff_within_limits(time_diff, time_shift=expected_shift):
                 # Add 10ms such that new time_mark don't match previous time exactly
                 self._time_lag_diff = time_diff - timedelta(milliseconds=10)
                 new_time_mark -= self._time_lag_diff
 
         # If within buggy period
         else:
-            if time_diff > self.time_diff_zero:
+            if time_diff >= self.time_diff_zero:
                 new_time_mark -= self._time_lag_diff
-            elif self._time_diff_within_limits(time_diff, time_shift=timedelta(hours=8)):
+            elif self._time_diff_within_limits(time_diff, time_shift=expected_shift):
                 # Return to normal operation
                 self._time_lag_diff = None
             else:
