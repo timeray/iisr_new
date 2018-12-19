@@ -214,9 +214,9 @@ class ActiveResult(HandlerResult):
 
     @property
     def short_name(self) -> str:
-        return 'ch{}_freq{:.2f}_len{}'.format(self.channels,
-                                              self.frequency['MHz'],
-                                              self.pulse_length['us'])
+        return 'ch({})_freq{:.2f}_len{}'.format(','.join(self.channels),
+                                                self.frequency['MHz'],
+                                                self.pulse_length['us'])
 
     def __getattr__(self, item):
         if item in self.__dict__:
