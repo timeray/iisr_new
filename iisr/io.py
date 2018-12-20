@@ -345,7 +345,7 @@ def _raw2refined_parameters(raw_parameters: Dict[str, int],
     # if pulse_type is 'short' and pulse_length_us == 0:
     #     pulse_type = 'noise'
 
-    if pulse_type is 'long':
+    if pulse_type is 'short':
         long_pulse_len = pulse_length_us
     else:
         long_pulse_len = 0

@@ -168,13 +168,16 @@ def _parse_header(header: str, keys: List[str], types: List[type]) -> List:
 
 
 class ActiveResult(HandlerResult):
-    quantity_headers = {'power': 'Power', 'coherence': 'Coherence'}
+    quantity_headers = {'power': 'Power', 'coherence': 'Coherence', 'clutter': 'Clutter',
+                        'power_no_clutter': 'NoClutterPower'}
     mode_name = 'active'
 
     def __init__(self, parameters: ActiveParameters,
                  time_marks: Sequence[datetime],
                  power: Dict[Channel, np.ndarray] = None,
-                 coherence: np.ndarray = None):
+                 coherence: np.ndarray = None,
+                 clutter: Dict[Channel, np.ndarray] = None,
+                 power_no_clutter: Dict[Channel, np.ndarray] = None):
         """Result of processing of active experiment. It is expected, that power and spectrum are
         calculated for each (frequency, pulse_len, channel) and time marks are aligned.
 
@@ -185,8 +188,10 @@ class ActiveResult(HandlerResult):
             time_marks: Sorted array of datetimes.
             power: Dictionary (key for each channel) of power profiles.
                 Each profiles should have shape [len(time_marks), n_samples].
-            coherence: Coherence between channels_set. Complex values.
+            coherence: Coherence between channels. Complex values.
                 Shape [len(time_marks), n_samples].
+            clutter: Coherently summed quadratures.
+                Sahpe [len(time_marks, n_samples]
         """
         if power is not None:
             if tuple(sorted(power.keys())) != parameters.channels:
@@ -204,17 +209,24 @@ class ActiveResult(HandlerResult):
             if not np.iscomplexobj(coherence):
                 raise ValueError('Expect coherence to be complex valued')
 
+        if clutter is not None:
+            for cl in clutter.values():
+                if len(time_marks) != len(cl):
+                    raise ValueError('Length of time_marks and all clutter arrays must be equal')
+
         self.parameters = parameters
         self.time_marks = np.array(time_marks, dtype=datetime)
         self.power = power
         self.coherence = coherence
+        self.clutter = clutter
+        self.power_no_clutter = power_no_clutter
 
         # Calculate all involved dates
         self.dates = sorted(set((date(dt.year, dt.month, dt.day) for dt in self.time_marks)))
 
     @property
     def short_name(self) -> str:
-        return 'ch({})_freq{:.2f}_len{}'.format(','.join(self.channels),
+        return 'ch({})_freq{:.2f}_len{}'.format(','.join((str(ch) for ch in self.channels)),
                                                 self.frequency['MHz'],
                                                 self.pulse_length['us'])
 
@@ -236,6 +248,14 @@ class ActiveResult(HandlerResult):
                 cols.append('{}_ch{},abs.units'.format(self.quantity_headers['power'], ch))
         if self.coherence is not None:
             cols.append(self.quantity_headers['coherence'])
+        if self.clutter is not None:
+            for ch in self.clutter:
+                cols.append('{}_ch{}'.format(self.quantity_headers['clutter'], ch))
+
+            for ch in self.power_no_clutter:
+                cols.append(
+                    '{}_ch{},abs.units'.format(self.quantity_headers['power_no_clutter'], ch)
+                )
         file.write(sep.join(cols))
         file.write('\n')
 
@@ -268,6 +288,14 @@ class ActiveResult(HandlerResult):
 
         if self.coherence is not None:
             columns.append((float_fmt.format(val) for val in self.coherence[date_mask].ravel()))
+
+        if self.clutter is not None:
+            for ch in self.clutter:
+                columns.append((float_fmt.format(val)
+                                for val in self.clutter[ch][date_mask].ravel()))
+            for ch in self.power_no_clutter:
+                columns.append((float_fmt.format(val)
+                                for val in self.power_no_clutter[ch][date_mask].ravel()))
 
         for row in zip(*columns):
             file.write(sep.join(row) + '\n')
@@ -327,9 +355,12 @@ class ActiveResult(HandlerResult):
 
         is_power_present = False
         is_coherence_present = False
+        is_clutter_present = False
 
         quantities_types = []
         pwr_counter = 0
+        cl_counter = 0
+        cl_pwr_counter = 0
         for pos in range(3, len(header)):
             if header[pos].startswith(cls.quantity_headers['power']):
                 is_power_present = True
@@ -341,6 +372,20 @@ class ActiveResult(HandlerResult):
             elif header[pos].startswith(cls.quantity_headers['coherence']):
                 is_coherence_present = True
                 quantities_types.append(complex)
+
+            elif header[pos].startswith(cls.quantity_headers['clutter']):
+                is_clutter_present = True
+                quantities_types.append(complex)
+                ch = _parse_header(header[pos], ['ch'], [int])[0]
+                assert params.channels[cl_counter] == Channel(ch)
+                cl_counter += 1
+
+            elif header[pos].startswith(cls.quantity_headers['power_no_clutter']):
+                is_clutter_present = True
+                quantities_types.append(float)
+                ch = _parse_header(header[pos], ['ch'], [int])[0]
+                assert params.channels[cl_pwr_counter] == Channel(ch)
+                cl_pwr_counter += 1
 
             else:
                 raise ReadingError('Unknown quantity: {}'.format(header[pos]))
@@ -392,7 +437,23 @@ class ActiveResult(HandlerResult):
         else:
             coherence = None
 
-        return cls(params, sorted(time_marks), power=power, coherence=coherence)
+        if is_clutter_present:
+            clutter = {}
+            for ch in params.channels:
+                clutter[ch] = np.array(arrays[arr_num], dtype=complex).reshape(expected_arr_shape)
+                arr_num += 1
+
+            power_no_clutter = {}
+            for ch in params.channels:
+                power_no_clutter[ch] = np.array(arrays[arr_num], dtype=float)\
+                    .reshape(expected_arr_shape)
+                arr_num += 1
+        else:
+            clutter = None
+            power_no_clutter = None
+
+        return cls(params, sorted(time_marks), power=power, coherence=coherence, clutter=clutter,
+                   power_no_clutter=power_no_clutter)
 
 
 class ActiveBatch(HandlerBatch):
@@ -403,8 +464,11 @@ class ActiveBatch(HandlerBatch):
 
 class ActiveHandler(Handler):
     """Abstract class for active processing"""
+    clutter_start_index = NotImplemented
+
     def __init__(self, active_parameters: ActiveParameters,
-                 n_fft=None, h_step=None, eval_power=True, eval_coherence=False):
+                 n_fft=None, h_step=None, eval_power=True, eval_coherence=False,
+                 eval_clutter=True):
         self.active_parameters = active_parameters
         self.channels = active_parameters.channels
 
@@ -413,13 +477,26 @@ class ActiveHandler(Handler):
 
         self.eval_power = eval_power
         self.eval_coherence = eval_coherence
+        self.eval_clutter = eval_clutter
 
         self.time_marks = []
         self.power = defaultdict(list) if self.eval_power else None
         self.coherence = [] if self.eval_coherence else None
+        self.clutter = defaultdict(list) if self.eval_clutter else None
+        self.power_no_clutter = defaultdict(list) if self.eval_clutter else None
 
     def preproc_quads(self, quadratures: np.ndarray) -> np.ndarray:
         return quadratures
+
+    def estimate_clutter(self, quadratures: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        clutter = quadratures.mean(axis=0)
+
+        idx = self.clutter_start_index
+        norm = (np.abs(clutter[idx:]) ** 2).sum()
+        variations = ((quadratures * clutter.conj())[:, idx:]).sum(axis=1) / norm
+
+        power = self.calc_power(quadratures - variations[:, None] * clutter)
+        return clutter, power
 
     def handle(self, batch: ActiveBatch):
         time_marks = batch.time_marks
@@ -449,6 +526,12 @@ class ActiveHandler(Handler):
                                                  quadratures[self.channels[1]])
             self.coherence.append(coherence)
 
+        if self.eval_clutter:
+            for ch in channels:
+                cl, pwr = self.estimate_clutter(quadratures[ch])
+                self.clutter[ch].append(cl)
+                self.power_no_clutter[ch].append(pwr)
+
     def finish(self) -> ActiveResult:
         """Output results"""
         # Convert evaluated quantities to 2-d arrays
@@ -466,11 +549,26 @@ class ActiveHandler(Handler):
             coherence = np.stack(self.coherence)
         else:
             coherence = None
-        return ActiveResult(self.active_parameters, self.time_marks, power, coherence)
+
+        if self.eval_clutter:
+            assert isinstance(self.clutter, dict)
+
+            clutter = {}
+            power_no_clutter = {}
+            for ch in self.clutter:
+                clutter[ch] = np.stack(self.clutter[ch])
+                power_no_clutter[ch] = np.stack(self.power_no_clutter[ch])
+        else:
+            clutter = None
+
+        return ActiveResult(self.active_parameters, self.time_marks, power, coherence,
+                            clutter, power_no_clutter)
 
 
 class LongPulseActiveHandler(ActiveHandler):
     """Class for processing of narrowband series (default channels_set 0, 2)"""
+    clutter_start_index = 40
+
     def __init__(self, active_parameters: ActiveParameters,
                  filter_half_band=25000, n_fft=None, h_step=None,
                  eval_power=True, eval_coherence=False):
@@ -496,6 +594,8 @@ class LongPulseActiveHandler(ActiveHandler):
 
 class ShortPulseActiveHandler(ActiveHandler):
     """Class for processing of wideband series (default channels_set 1, 3)"""
+    clutter_start_index = 120
+
     def __init__(self, active_parameters: ActiveParameters,
                  n_fft=None, h_step=None, eval_power=True, eval_coherence=False):
         super().__init__(active_parameters, n_fft, h_step, eval_power, eval_coherence)
