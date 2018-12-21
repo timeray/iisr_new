@@ -252,6 +252,7 @@ class ActiveResult(HandlerResult):
             for ch in self.clutter:
                 cols.append('{}_ch{}'.format(self.quantity_headers['clutter'], ch))
 
+        if self.power_no_clutter is not None:
             for ch in self.power_no_clutter:
                 cols.append(
                     '{}_ch{},abs.units'.format(self.quantity_headers['power_no_clutter'], ch)
@@ -293,6 +294,8 @@ class ActiveResult(HandlerResult):
             for ch in self.clutter:
                 columns.append((float_fmt.format(val)
                                 for val in self.clutter[ch][date_mask].ravel()))
+
+        if self.power_no_clutter is not None:
             for ch in self.power_no_clutter:
                 columns.append((float_fmt.format(val)
                                 for val in self.power_no_clutter[ch][date_mask].ravel()))
@@ -560,6 +563,7 @@ class ActiveHandler(Handler):
                 power_no_clutter[ch] = np.stack(self.power_no_clutter[ch])
         else:
             clutter = None
+            power_no_clutter = None
 
         return ActiveResult(self.active_parameters, self.time_marks, power, coherence,
                             clutter, power_no_clutter)

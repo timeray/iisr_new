@@ -346,7 +346,7 @@ def _raw2refined_parameters(raw_parameters: Dict[str, int],
     #     pulse_type = 'noise'
 
     if pulse_type is 'short':
-        long_pulse_len = pulse_length_us
+        long_pulse_len = raw_parameters['{}_{}_len'.format(antenna_end, 'long')]
     else:
         long_pulse_len = 0
 
