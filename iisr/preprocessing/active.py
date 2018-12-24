@@ -492,13 +492,33 @@ class ActiveHandler(Handler):
         return quadratures
 
     def estimate_clutter(self, quadratures: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        clutter = quadratures.mean(axis=0)
-
+        # Assuming that each subsequent realization differs by some constant complex k:
+        # Find k[i], i = 0..N-1, N-1 - number of realizations in the batch
+        # (k maximize sum of current and previous realizations)
         idx = self.clutter_start_index
-        norm = (np.abs(clutter[idx:]) ** 2).sum()
-        variations = ((quadratures * clutter.conj())[:, idx:]).sum(axis=1) / norm
+        norm = (np.abs(quadratures[:, idx:]) ** 2).sum(axis=1)
 
-        power = self.calc_power(quadratures - variations[:, None] * clutter)
+        # We should find good reference quadrature, which will be our pivot when we calibrate
+        # all quadratures
+        # To reduce the amount of necessary computations, try 5 random indexes (start with 0
+        random_indexes = [0] + list(np.random.randint(0, quadratures.shape[0], 5))
+        for i in random_indexes:
+            k = -(quadratures[:, idx:].conj() * quadratures[i, idx:]).sum(axis=1) / norm
+            mask = np.abs(k) > 0.5
+            if mask.sum() > quadratures.shape[0] // 2:
+                # Then we find correct k
+                break
+        else:
+            # Can't find reference, using i = 0
+            k = -(quadratures[:, idx:].conj() * quadratures[0, idx:]).sum(axis=1) / norm
+            mask = np.ones_like(k, dtype=bool)
+
+        # Now we have k - calibration coefficient and mask that indicates realizations that
+        # have correlation with reference > 0.5
+        # Clutter and power should be calculated using quadratures with high correlation
+        aligned_quadratures = quadratures[mask] * k[mask, None]
+        clutter = aligned_quadratures.mean(axis=0)
+        power = self.calc_power(aligned_quadratures - clutter)
         return clutter, power
 
     def handle(self, batch: ActiveBatch):

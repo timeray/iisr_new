@@ -57,7 +57,7 @@ def _parse_frequency(frequencies: str) -> List[Frequency]:
 
 @option_parser_decorator
 def _parse_time_units(time_units_values_us: str) -> List[TimeUnit]:
-    return [TimeUnit(float(val), 'us') for val in time_units_values_us]
+    return [TimeUnit(float(val), 'us') for val in time_units_values_us.split(SEPARATOR)]
 
 
 def main(argv=None):
