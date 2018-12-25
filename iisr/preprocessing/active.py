@@ -495,28 +495,35 @@ class ActiveHandler(Handler):
         # Assuming that each subsequent realization differs by some constant complex k:
         # Find k[i], i = 0..N-1, N-1 - number of realizations in the batch
         # (k maximize sum of current and previous realizations)
-        idx = self.clutter_start_index
-        norm = (np.abs(quadratures[:, idx:]) ** 2).sum(axis=1)
+        sidx = self.clutter_start_index
+        # norm = (np.abs(quadratures[:, sidx:]) ** 2).sum(axis=1)
+        #
+        # # We should find good reference quadrature, which will be our pivot when we calibrate
+        # # all quadratures
+        # # To reduce the amount of necessary computations, try 5 random indexes (start with 0
+        # random_indexes = [0] + list(np.random.randint(0, quadratures.shape[0], 5))
+        # for i in random_indexes:
+        #     k = -(quadratures[:, sidx:].conj() * quadratures[i, sidx:]).sum(axis=1) / norm
+        #     mask = np.abs(k) > 0.5
+        #     if mask.sum() > quadratures.shape[0] // 2:
+        #         # Then we find correct k
+        #         break
+        # else:
+        #     # Can't find reference, using i = 0
+        #     k = -(quadratures[:, sidx:].conj() * quadratures[0, sidx:]).sum(axis=1) / norm
+        #     mask = np.ones_like(k, dtype=bool)
+        #
+        # # Renormalize k
+        # k *= norm
+        # k /= k[mask].mean()
 
-        # We should find good reference quadrature, which will be our pivot when we calibrate
-        # all quadratures
-        # To reduce the amount of necessary computations, try 5 random indexes (start with 0
-        random_indexes = [0] + list(np.random.randint(0, quadratures.shape[0], 5))
-        for i in random_indexes:
-            k = -(quadratures[:, idx:].conj() * quadratures[i, idx:]).sum(axis=1) / norm
-            mask = np.abs(k) > 0.5
-            if mask.sum() > quadratures.shape[0] // 2:
-                # Then we find correct k
-                break
-        else:
-            # Can't find reference, using i = 0
-            k = -(quadratures[:, idx:].conj() * quadratures[0, idx:]).sum(axis=1) / norm
-            mask = np.ones_like(k, dtype=bool)
+        phase = np.angle((quadratures[0, sidx:] * quadratures[:, sidx:].conj()).sum(axis=1))
+        mask = np.abs(phase) < (5 * phase.std())
 
         # Now we have k - calibration coefficient and mask that indicates realizations that
         # have correlation with reference > 0.5
         # Clutter and power should be calculated using quadratures with high correlation
-        aligned_quadratures = quadratures[mask] * k[mask, None]
+        aligned_quadratures = quadratures[mask] * np.exp(1j * phase[mask, None])
         clutter = aligned_quadratures.mean(axis=0)
         power = self.calc_power(aligned_quadratures - clutter)
         return clutter, power
