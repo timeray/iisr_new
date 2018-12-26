@@ -496,8 +496,6 @@ class ActiveHandler(Handler):
         # Find k[i], i = 0..N-1, N-1 - number of realizations in the batch
         # (k maximize sum of current and previous realizations)
         sidx = self.clutter_start_index
-        # norm = (np.abs(quadratures[:, sidx:]) ** 2).sum(axis=1)
-        #
         # # We should find good reference quadrature, which will be our pivot when we calibrate
         # # all quadratures
         # # To reduce the amount of necessary computations, try 5 random indexes (start with 0
@@ -512,20 +510,23 @@ class ActiveHandler(Handler):
         #     # Can't find reference, using i = 0
         #     k = -(quadratures[:, sidx:].conj() * quadratures[0, sidx:]).sum(axis=1) / norm
         #     mask = np.ones_like(k, dtype=bool)
-        #
-        # # Renormalize k
-        # k *= norm
-        # k /= k[mask].mean()
 
-        phase = np.angle((quadratures[0, sidx:] * quadratures[:, sidx:].conj()).sum(axis=1))
-        mask = np.abs(phase) < (5 * phase.std())
+        corr = (quadratures[0, sidx:] * quadratures[:, sidx:].conj()).sum(axis=1)
+        corr_mod = np.abs(corr)
+        corr_phase = np.angle(corr)
+        mask = np.abs(corr_mod - corr_mod.mean()) < corr_mod.std() * 5
 
         # Now we have k - calibration coefficient and mask that indicates realizations that
         # have correlation with reference > 0.5
         # Clutter and power should be calculated using quadratures with high correlation
-        aligned_quadratures = quadratures[mask] * np.exp(1j * phase[mask, None])
+        aligned_quadratures = quadratures[mask] * np.exp(1j * corr_phase[mask, None])
         clutter = aligned_quadratures.mean(axis=0)
-        power = self.calc_power(aligned_quadratures - clutter)
+
+        clutter_norm = (np.abs(clutter[sidx:]) ** 2).sum()
+        amplitude_drift = (aligned_quadratures[:, sidx:] * clutter[sidx:].conj()).sum(axis=1) \
+                          / clutter_norm
+
+        power = self.calc_power(aligned_quadratures - amplitude_drift[:, None] * clutter)
         return clutter, power
 
     def handle(self, batch: ActiveBatch):
