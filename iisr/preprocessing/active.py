@@ -496,6 +496,8 @@ class ActiveHandler(Handler):
         # Find k[i], i = 0..N-1, N-1 - number of realizations in the batch
         # (k maximize sum of current and previous realizations)
         sidx = self.clutter_start_index
+        stop_distance_km = 300
+
         # # We should find good reference quadrature, which will be our pivot when we calibrate
         # # all quadratures
         # # To reduce the amount of necessary computations, try 5 random indexes (start with 0
@@ -511,19 +513,21 @@ class ActiveHandler(Handler):
         #     k = -(quadratures[:, sidx:].conj() * quadratures[0, sidx:]).sum(axis=1) / norm
         #     mask = np.ones_like(k, dtype=bool)
 
-        corr = (quadratures[0, sidx:] * quadratures[:, sidx:].conj()).sum(axis=1)
+        dist_mask = self.active_parameters.distance['km'] < stop_distance_km
+        dist_mask[:sidx] = False
+
+        corr = (quadratures[0, dist_mask] * quadratures[:, dist_mask].conj()).sum(axis=1)
         corr_mod = np.abs(corr)
         corr_phase = np.angle(corr)
-        mask = np.abs(corr_mod - corr_mod.mean()) < corr_mod.std() * 5
+        mask = np.abs(corr_mod - corr_mod.mean()) < corr_mod.std() * 3
 
-        # Now we have k - calibration coefficient and mask that indicates realizations that
-        # have correlation with reference > 0.5
         # Clutter and power should be calculated using quadratures with high correlation
         aligned_quadratures = quadratures[mask] * np.exp(1j * corr_phase[mask, None])
         clutter = aligned_quadratures.mean(axis=0)
 
-        clutter_norm = (np.abs(clutter[sidx:]) ** 2).sum()
-        amplitude_drift = (aligned_quadratures[:, sidx:] * clutter[sidx:].conj()).sum(axis=1) \
+        clutter_norm = (np.abs(clutter[dist_mask]) ** 2).sum()
+        amplitude_drift = (aligned_quadratures[:, dist_mask]
+                           * clutter[dist_mask].conj()).sum(axis=1) \
                           / clutter_norm
 
         power = self.calc_power(aligned_quadratures - amplitude_drift[:, None] * clutter)
@@ -599,7 +603,7 @@ class ActiveHandler(Handler):
 
 class LongPulseActiveHandler(ActiveHandler):
     """Class for processing of narrowband series (default channels_set 0, 2)"""
-    clutter_start_index = 40
+    clutter_start_index = 50
 
     def __init__(self, active_parameters: ActiveParameters,
                  filter_half_band=25000, n_fft=None, h_step=None,
