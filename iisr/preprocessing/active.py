@@ -519,7 +519,10 @@ class ActiveHandler(Handler):
         corr = (quadratures[0, dist_mask] * quadratures[:, dist_mask].conj()).sum(axis=1)
         corr_mod = np.abs(corr)
         corr_phase = np.angle(corr)
-        mask = np.abs(corr_mod - corr_mod.mean()) < corr_mod.std() * 3
+        mask = np.abs(corr_mod - corr_mod.mean()) < corr_mod.std() * 3  # correlation outliers
+        per_time_power = self.calc_power(np.abs(quadratures[:, dist_mask]), axis=1)
+        # power outliers
+        mask &= (per_time_power - per_time_power[mask].mean()) < per_time_power[mask].std() * 3
 
         # Clutter and power should be calculated using quadratures with high correlation
         aligned_quadratures = quadratures[mask] * np.exp(1j * corr_phase[mask, None])
