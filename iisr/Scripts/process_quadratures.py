@@ -42,22 +42,22 @@ def option_parser_decorator(parser: Callable) -> Callable:
 
 @option_parser_decorator
 def _parse_path(paths: str) -> List[Path]:
-    return [Path(path) for path in paths.split(SEPARATOR)]
+    return [Path(path.strip()) for path in paths.split(SEPARATOR)]
 
 
 @option_parser_decorator
 def _parse_channels(channels: str) -> List[Channel]:
-    return [Channel(int(ch)) for ch in channels.split(SEPARATOR)]
+    return [Channel(int(ch.strip())) for ch in channels.split(SEPARATOR)]
 
 
 @option_parser_decorator
 def _parse_frequency(frequencies: str) -> List[Frequency]:
-    return [Frequency(float(freq), 'MHz') for freq in frequencies.split(SEPARATOR)]
+    return [Frequency(float(freq.strip()), 'MHz') for freq in frequencies.split(SEPARATOR)]
 
 
 @option_parser_decorator
 def _parse_time_units(time_units_values_us: str) -> List[TimeUnit]:
-    return [TimeUnit(float(val), 'us') for val in time_units_values_us.split(SEPARATOR)]
+    return [TimeUnit(float(val.strip()), 'us') for val in time_units_values_us.split(SEPARATOR)]
 
 
 def main(argv=None):
