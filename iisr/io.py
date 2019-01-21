@@ -667,7 +667,7 @@ class DataFileReader(DataFileIO):
     @staticmethod
     def _time_diff_within_limits(time_diff: timedelta,
                                  time_shift: timedelta,
-                                 limits: timedelta = timedelta(minutes=10)):
+                                 limits: timedelta = timedelta(minutes=15)):
         if time_shift + limits > abs(time_diff) > time_shift - limits:
             return True
         else:
