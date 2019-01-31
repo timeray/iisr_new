@@ -4,6 +4,8 @@ from datetime import datetime, date, timedelta
 
 import numpy as np
 from scipy import signal
+from scipy.signal import medfilt
+from scipy.stats import pearsonr
 from typing import List, TextIO, Dict, Sequence, Tuple, Generator, Iterator, Any
 
 from iisr.io import ExperimentParameters, TimeSeriesPackage
@@ -488,10 +490,12 @@ class ActiveHandler(Handler):
         self.clutter = defaultdict(list) if self.eval_clutter else None
         self.power_no_clutter = defaultdict(list) if self.eval_clutter else None
 
+        self.clutter_reference_quadratures = {}
+
     def preproc_quads(self, quadratures: np.ndarray) -> np.ndarray:
         return quadratures
 
-    def estimate_clutter(self, quadratures: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def estimate_clutter(self, ch, quadratures: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         # Assuming that each subsequent realization differs by some constant complex k:
         # Find k[i], i = 0..N-1, N-1 - number of realizations in the batch
         # (k maximize sum of current and previous realizations)
@@ -516,7 +520,9 @@ class ActiveHandler(Handler):
         dist_mask = self.active_parameters.distance['km'] < stop_distance_km
         dist_mask[:sidx] = False
 
-        corr = (quadratures[0, dist_mask] * quadratures[:, dist_mask].conj()).sum(axis=1)
+        ref_quads = self.clutter_reference_quadratures.setdefault(ch, quadratures[0])
+
+        corr = (ref_quads[dist_mask] * quadratures[:, dist_mask].conj()).sum(axis=1)
         corr_mod = np.abs(corr)
         corr_phase = np.angle(corr)
         mask = np.abs(corr_mod - corr_mod.mean()) < corr_mod.std() * 3  # correlation outliers
@@ -532,6 +538,9 @@ class ActiveHandler(Handler):
         amplitude_drift = (aligned_quadratures[:, dist_mask]
                            * clutter[dist_mask].conj()).sum(axis=1) \
                           / clutter_norm
+
+        # filter drift
+        # amplitude_drift = medfilt(np.abs(amplitude_drift), 3)
 
         power = self.calc_power(aligned_quadratures - amplitude_drift[:, None] * clutter)
         return clutter, power
@@ -566,7 +575,7 @@ class ActiveHandler(Handler):
 
         if self.eval_clutter:
             for ch in channels:
-                cl, pwr = self.estimate_clutter(quadratures[ch])
+                cl, pwr = self.estimate_clutter(ch, quadratures[ch])
                 self.clutter[ch].append(cl)
                 self.power_no_clutter[ch].append(pwr)
 
