@@ -490,8 +490,6 @@ class ActiveHandler(Handler):
         self.clutter = defaultdict(list) if self.eval_clutter else None
         self.power_no_clutter = defaultdict(list) if self.eval_clutter else None
 
-        self.clutter_reference_quadratures = {}
-
     def preproc_quads(self, quadratures: np.ndarray) -> np.ndarray:
         return quadratures
 
@@ -502,27 +500,10 @@ class ActiveHandler(Handler):
         sidx = self.clutter_start_index
         stop_distance_km = 300
 
-        # # We should find good reference quadrature, which will be our pivot when we calibrate
-        # # all quadratures
-        # # To reduce the amount of necessary computations, try 5 random indexes (start with 0
-        # random_indexes = [0] + list(np.random.randint(0, quadratures.shape[0], 5))
-        # for i in random_indexes:
-        #     k = -(quadratures[:, sidx:].conj() * quadratures[i, sidx:]).sum(axis=1) / norm
-        #     mask = np.abs(k) > 0.5
-        #     if mask.sum() > quadratures.shape[0] // 2:
-        #         # Then we find correct k
-        #         break
-        # else:
-        #     # Can't find reference, using i = 0
-        #     k = -(quadratures[:, sidx:].conj() * quadratures[0, sidx:]).sum(axis=1) / norm
-        #     mask = np.ones_like(k, dtype=bool)
-
         dist_mask = self.active_parameters.distance['km'] < stop_distance_km
         dist_mask[:sidx] = False
 
-        ref_quads = self.clutter_reference_quadratures.setdefault(ch, quadratures[0])
-
-        corr = (ref_quads[dist_mask] * quadratures[:, dist_mask].conj()).sum(axis=1)
+        corr = (quadratures[0, dist_mask] * quadratures[:, dist_mask].conj()).sum(axis=1)
         corr_mod = np.abs(corr)
         corr_phase = np.angle(corr)
         mask = np.abs(corr_mod - corr_mod.mean()) < corr_mod.std() * 3  # correlation outliers
@@ -539,10 +520,27 @@ class ActiveHandler(Handler):
                            * clutter[dist_mask].conj()).sum(axis=1) \
                           / clutter_norm
 
-        # filter drift
-        # amplitude_drift = medfilt(np.abs(amplitude_drift), 3)
+        # power = self.calc_power(aligned_quadratures - amplitude_drift[:, None] * clutter)
 
-        power = self.calc_power(aligned_quadratures - amplitude_drift[:, None] * clutter)
+        # Calculate correlation matrix
+        clut_pwr = np.abs(aligned_quadratures[:, dist_mask])**2
+        corr_matrix = np.corrcoef(clut_pwr)
+
+        max_corr_args = corr_matrix.argsort(axis=0)[-2]
+
+        power = self.calc_power(
+            aligned_quadratures
+            - aligned_quadratures[max_corr_args] / amplitude_drift[max_corr_args, None]
+        )
+        power /= 2
+
+        # batch_max_corr_args = corr_matrix.argsort(axis=0)[-12:-2]
+        #
+        # clutter_corr = (aligned_quadratures[batch_max_corr_args]
+        #                 / amplitude_drift[batch_max_corr_args, None]).mean(axis=0)
+        #
+        # pair_power10 = self.calc_power(aligned_quadratures - clutter_corr)
+
         return clutter, power
 
     def handle(self, batch: ActiveBatch):
