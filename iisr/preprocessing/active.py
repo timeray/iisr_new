@@ -500,16 +500,23 @@ class ActiveHandler(Handler):
         sidx = self.clutter_start_index
         stop_distance_km = 300
 
-        dist_mask = self.active_parameters.distance['km'] < stop_distance_km
+        dist = self.active_parameters.distance['km']
+        dist_mask = dist < stop_distance_km
         dist_mask[:sidx] = False
 
         corr = (quadratures[0, dist_mask] * quadratures[:, dist_mask].conj()).sum(axis=1)
         corr_mod = np.abs(corr)
         corr_phase = np.angle(corr)
         mask = np.abs(corr_mod - corr_mod.mean()) < corr_mod.std() * 3  # correlation outliers
-        per_time_power = self.calc_power(np.abs(quadratures[:, dist_mask]), axis=1)
+
         # power outliers
-        mask &= (per_time_power - per_time_power[mask].mean()) < per_time_power[mask].std() * 3
+        clutter_range_power = self.calc_power(np.abs(quadratures[:, dist_mask]), axis=1)
+        mask &= (clutter_range_power - clutter_range_power[mask].mean()) \
+                < clutter_range_power[mask].std() * 3
+
+        mid_dist_mask = (dist >= 250) & (dist <= stop_distance_km)
+        mid_range_power = self.calc_power(np.abs(quadratures[:, mid_dist_mask]), axis=1)
+        mask &= (mid_range_power - mid_range_power[mask].mean()) < mid_range_power[mask].std() * 3
 
         # Clutter and power should be calculated using quadratures with high correlation
         aligned_quadratures = quadratures[mask] * np.exp(1j * corr_phase[mask, None])
@@ -520,20 +527,23 @@ class ActiveHandler(Handler):
                            * clutter[dist_mask].conj()).sum(axis=1) \
                           / clutter_norm
 
+        # # Method: Subtract mean of all series
         # power = self.calc_power(aligned_quadratures - amplitude_drift[:, None] * clutter)
+        #
+        # # Calculate pearson correlation matrix
+        # clut_pwr = np.abs(aligned_quadratures[:, dist_mask])**2
+        # corr_matrix = np.corrcoef(clut_pwr)
+        #
+        # # Method: Subtract closest series
+        # max_corr_args = np.abs(corr_matrix).argsort(axis=0)[-2]
+        #
+        # power = self.calc_power(
+        #     aligned_quadratures
+        #     - aligned_quadratures[max_corr_args] / amplitude_drift[max_corr_args, None]
+        # )
+        # power /= 2
 
-        # Calculate correlation matrix
-        clut_pwr = np.abs(aligned_quadratures[:, dist_mask])**2
-        corr_matrix = np.corrcoef(clut_pwr)
-
-        max_corr_args = corr_matrix.argsort(axis=0)[-2]
-
-        power = self.calc_power(
-            aligned_quadratures
-            - aligned_quadratures[max_corr_args] / amplitude_drift[max_corr_args, None]
-        )
-        power /= 2
-
+        # # Method: Subtract mean of 10 closest series
         # batch_max_corr_args = corr_matrix.argsort(axis=0)[-12:-2]
         #
         # clutter_corr = (aligned_quadratures[batch_max_corr_args]
@@ -541,6 +551,10 @@ class ActiveHandler(Handler):
         #
         # pair_power10 = self.calc_power(aligned_quadratures - clutter_corr)
 
+        # Method: Subtract previous series
+        new_quadratures = aligned_quadratures[1:] \
+                          - aligned_quadratures[:-1] * amplitude_drift[:-1, None]
+        power = self.calc_power(new_quadratures) / 2
         return clutter, power
 
     def handle(self, batch: ActiveBatch):
