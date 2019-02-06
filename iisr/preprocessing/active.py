@@ -14,6 +14,7 @@ from iisr.preprocessing.representation import HandlerResult, Handler, HandlerPar
 from iisr.representation import Channel, ADJACENT_CHANNELS
 from iisr.units import Frequency, TimeUnit, Distance
 from iisr.utils import TIME_FMT, DATE_FMT, central_time
+from iisr.filtering import MedianAdAroundMedianFilter
 
 __all__ = ['calc_delays', 'delays2distance', 'ActiveParameters', 'ActiveResult',
            'LongPulseActiveHandler', 'ShortPulseActiveHandler',
@@ -507,17 +508,27 @@ class ActiveHandler(Handler):
         corr = (quadratures[0, dist_mask] * quadratures[:, dist_mask].conj()).sum(axis=1)
         corr_mod = np.abs(corr)
         corr_phase = np.angle(corr)
-        mask = np.abs(corr_mod - corr_mod.mean()) < corr_mod.std() * 3  # correlation outliers
+
+        outlier_filter = MedianAdAroundMedianFilter(n_sigma=5)
+
+        mask = ~outlier_filter(corr_mod).mask
+        # mask = np.abs(corr_mod - corr_mod.mean()) < corr_mod.std() * 3  # correlation outliers
 
         # power outliers
         clutter_range_power = self.calc_power(np.abs(quadratures[:, dist_mask]), axis=1)
-        mask &= (clutter_range_power - clutter_range_power[mask].mean()) \
-                < clutter_range_power[mask].std() * 3
+
+        # mask &= (clutter_range_power - clutter_range_power[mask].mean()) \
+        #         < clutter_range_power[mask].std() * 3
+        mask &= ~outlier_filter(clutter_range_power).mask
 
         mid_dist_mask = (dist >= 250) & (dist <= stop_distance_km)
         mid_range_power = self.calc_power(np.abs(quadratures[:, mid_dist_mask]), axis=1)
-        mask &= (mid_range_power - mid_range_power[mask].mean()) < mid_range_power[mask].std() * 3
 
+        # mask &= (mid_range_power - mid_range_power[mask].mean()) < mid_range_power[mask].std() * 3
+        mask &= ~outlier_filter(mid_range_power).mask
+
+        print(self.active_parameters.frequency, self.active_parameters.pulse_length, self.channels,
+              mask.sum() / mask.size)
         # Clutter and power should be calculated using quadratures with high correlation
         aligned_quadratures = quadratures[mask] * np.exp(1j * corr_phase[mask, None])
         clutter = aligned_quadratures.mean(axis=0)
