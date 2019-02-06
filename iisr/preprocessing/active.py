@@ -563,8 +563,9 @@ class ActiveHandler(Handler):
         # pair_power10 = self.calc_power(aligned_quadratures - clutter_corr)
 
         # Method: Subtract previous series
+        np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
         new_quadratures = aligned_quadratures[1:] \
-                          - aligned_quadratures[:-1] #* amplitude_drift[:-1, None]
+                          - aligned_quadratures[:-1] / amplitude_drift[:-1, None]
         power = self.calc_power(new_quadratures) / 2
         return clutter, power
 
