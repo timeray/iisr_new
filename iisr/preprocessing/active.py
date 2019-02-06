@@ -564,7 +564,7 @@ class ActiveHandler(Handler):
 
         # Method: Subtract previous series
         new_quadratures = aligned_quadratures[1:] \
-                          - aligned_quadratures[:-1] * amplitude_drift[:-1, None]
+                          - aligned_quadratures[:-1] #* amplitude_drift[:-1, None]
         power = self.calc_power(new_quadratures) / 2
         return clutter, power
 
