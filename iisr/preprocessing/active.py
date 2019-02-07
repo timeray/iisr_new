@@ -505,9 +505,26 @@ class ActiveHandler(Handler):
         dist_mask = dist < stop_distance_km
         dist_mask[:sidx] = False
 
-        corr = (quadratures[0, dist_mask] * quadratures[:, dist_mask].conj()).sum(axis=1)
-        corr_mod = np.abs(corr)
-        corr_phase = np.angle(corr)
+        # Try to find reference quadrature that have good phase correlation with others
+        size = quadratures.shape[0]
+        best_idx = 0
+        best_corr = None
+        best_phase_std = None
+        for test_idx in [0, size // 2, 3 * size // 4]:
+            corr = (quadratures[test_idx, dist_mask] * quadratures[:, dist_mask].conj()).sum(axis=1)
+            corr_phase = np.angle(corr)
+            corr_phase_std = np.unwrap(corr_phase).std()
+
+            if corr_phase_std < np.pi:
+                best_idx = test_idx
+                best_corr = corr
+                break
+            elif best_corr is None or corr_phase_std < best_phase_std:
+                best_idx = test_idx
+                best_corr = corr
+                best_phase_std = corr_phase_std
+
+        corr_mod = np.abs(best_corr)
 
         outlier_filter = MedianAdAroundMedianFilter(n_sigma=4.5)
 
@@ -527,8 +544,14 @@ class ActiveHandler(Handler):
         # mask &= (mid_range_power - mid_range_power[mask].mean()) < mid_range_power[mask].std() * 3
         mask &= ~outlier_filter(mid_range_power).mask
 
-        print(self.active_parameters.frequency, self.active_parameters.pulse_length, self.channels,
-              mask.sum() / mask.size)
+        msg = '{}, {}, dropped quadratures: {:.2f}%'.format(
+            self.active_parameters.frequency, self.active_parameters.pulse_length,
+            mask.sum() / mask.size * 100
+        )
+        if best_idx != 0:
+            msg += ', pick {} quadrature as reference'.format(test_idx)
+        print(msg)
+
         # Clutter and power should be calculated using quadratures with high correlation
         aligned_quadratures = quadratures[mask] * np.exp(1j * corr_phase[mask, None])
         clutter = aligned_quadratures.mean(axis=0)
@@ -537,9 +560,11 @@ class ActiveHandler(Handler):
         amplitude_drift = (aligned_quadratures[:, dist_mask]
                            * clutter[dist_mask].conj()).sum(axis=1) \
                           / clutter_norm
+        amplitude_drift = amplitude_drift.real  # assume phase is already correct
 
-        # Method: Subtract mean of all series
-        power = self.calc_power(aligned_quadratures - amplitude_drift[:, None] * clutter)
+        #
+        # # Method: Subtract mean of all series
+        # power = self.calc_power(aligned_quadratures - amplitude_drift[:, None] * clutter)
         #
         # # Calculate pearson correlation matrix
         # clut_pwr = np.abs(aligned_quadratures[:, dist_mask])**2
@@ -563,10 +588,10 @@ class ActiveHandler(Handler):
         # pair_power10 = self.calc_power(aligned_quadratures - clutter_corr)
 
         # Method: Subtract previous series
-        # np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
-        # new_quadratures = aligned_quadratures[1:] \
-        #                   - aligned_quadratures[:-1] / amplitude_drift[:-1, None]
-        # power = self.calc_power(new_quadratures) / 2
+        np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
+        new_quadratures = aligned_quadratures[1:] \
+                          - aligned_quadratures[:-1] / amplitude_drift[:-1, None]
+        power = self.calc_power(new_quadratures) / 2
         return clutter, power
 
     def handle(self, batch: ActiveBatch):
