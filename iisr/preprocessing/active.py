@@ -509,7 +509,7 @@ class ActiveHandler(Handler):
         corr_mod = np.abs(corr)
         corr_phase = np.angle(corr)
 
-        outlier_filter = MedianAdAroundMedianFilter(n_sigma=5)
+        outlier_filter = MedianAdAroundMedianFilter(n_sigma=4.5)
 
         mask = ~outlier_filter(corr_mod).mask
         # mask = np.abs(corr_mod - corr_mod.mean()) < corr_mod.std() * 3  # correlation outliers
@@ -538,8 +538,8 @@ class ActiveHandler(Handler):
                            * clutter[dist_mask].conj()).sum(axis=1) \
                           / clutter_norm
 
-        # # Method: Subtract mean of all series
-        # power = self.calc_power(aligned_quadratures - amplitude_drift[:, None] * clutter)
+        # Method: Subtract mean of all series
+        power = self.calc_power(aligned_quadratures - amplitude_drift[:, None] * clutter)
         #
         # # Calculate pearson correlation matrix
         # clut_pwr = np.abs(aligned_quadratures[:, dist_mask])**2
@@ -563,10 +563,10 @@ class ActiveHandler(Handler):
         # pair_power10 = self.calc_power(aligned_quadratures - clutter_corr)
 
         # Method: Subtract previous series
-        np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
-        new_quadratures = aligned_quadratures[1:] \
-                          - aligned_quadratures[:-1] / amplitude_drift[:-1, None]
-        power = self.calc_power(new_quadratures) / 2
+        # np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
+        # new_quadratures = aligned_quadratures[1:] \
+        #                   - aligned_quadratures[:-1] / amplitude_drift[:-1, None]
+        # power = self.calc_power(new_quadratures) / 2
         return clutter, power
 
     def handle(self, batch: ActiveBatch):
