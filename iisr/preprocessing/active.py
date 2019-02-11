@@ -554,6 +554,7 @@ class ActiveHandler(Handler):
 
         # Clutter and power should be calculated using quadratures with high correlation
         aligned_quadratures = quadratures[mask] * np.exp(1j * corr_phase[mask, None])
+
         clutter = aligned_quadratures.mean(axis=0)
 
         clutter_norm = (np.abs(clutter[dist_mask]) ** 2).sum()
@@ -590,7 +591,7 @@ class ActiveHandler(Handler):
         # Method: Subtract previous series
         np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
         new_quadratures = aligned_quadratures[1:] \
-                          - aligned_quadratures[:-1] / amplitude_drift[:-1, None]
+                          - aligned_quadratures[:-1] #/ amplitude_drift[:-1, None]
         power = self.calc_power(new_quadratures) / 2
         return clutter, power
 
@@ -668,10 +669,12 @@ class LongPulseActiveHandler(ActiveHandler):
 
     def __init__(self, active_parameters: ActiveParameters,
                  filter_half_band=25000, n_fft=None, h_step=None,
-                 eval_power=True, eval_coherence=False):
+                 eval_power=True, eval_coherence=False,
+                 apply_lowpass_filter=False):
         super().__init__(active_parameters, n_fft, h_step, eval_power, eval_coherence)
         self._filter = None
         self.filter_half_band = filter_half_band
+        self.apply_lowpass_filter = apply_lowpass_filter
 
     @property
     def filter(self) -> Dict[str, np.ndarray]:
@@ -684,9 +687,12 @@ class LongPulseActiveHandler(ActiveHandler):
         return self._filter
 
     def preproc_quads(self, quadratures: np.ndarray, axis=1) -> np.ndarray:
-        return signal.lfilter(
-            self.filter['numerator'], self.filter['denominator'], quadratures, axis=axis
-        )
+        if self.apply_lowpass_filter:
+            return signal.lfilter(
+                self.filter['numerator'], self.filter['denominator'], quadratures, axis=axis
+            )
+        else:
+            return quadratures
 
 
 class ShortPulseActiveHandler(ActiveHandler):
