@@ -1,3 +1,4 @@
+import logging
 import itertools as it
 from collections import defaultdict, namedtuple
 from datetime import datetime, date, timedelta
@@ -494,7 +495,7 @@ class ActiveHandler(Handler):
     def preproc_quads(self, quadratures: np.ndarray) -> np.ndarray:
         return quadratures
 
-    def estimate_clutter(self, ch, quadratures: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def estimate_clutter(self, quadratures: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         # Assuming that each subsequent realization differs by some constant complex k:
         # Find k[i], i = 0..N-1, N-1 - number of realizations in the batch
         # (k maximize sum of current and previous realizations)
@@ -544,16 +545,17 @@ class ActiveHandler(Handler):
         # mask &= (mid_range_power - mid_range_power[mask].mean()) < mid_range_power[mask].std() * 3
         mask &= ~outlier_filter(mid_range_power).mask
 
-        msg = '{}, {}, dropped quadratures: {:.2f}%'.format(
+        msg = 'processing stats: {}, {}, dropped quadratures: {:.2f}%'.format(
             self.active_parameters.frequency, self.active_parameters.pulse_length,
             mask.sum() / mask.size * 100
         )
         if best_idx != 0:
             msg += ', pick {} quadrature as reference'.format(test_idx)
-        print(msg)
+        logging.info(msg)
 
         # Clutter and power should be calculated using quadratures with high correlation
-        aligned_quadratures = quadratures[mask] * np.exp(1j * corr_phase[mask, None])
+        # aligned_quadratures = quadratures[mask] * np.exp(1j * corr_phase[mask, None])
+        aligned_quadratures = quadratures[mask]
 
         clutter = aligned_quadratures.mean(axis=0)
 
@@ -589,9 +591,8 @@ class ActiveHandler(Handler):
         # pair_power10 = self.calc_power(aligned_quadratures - clutter_corr)
 
         # Method: Subtract previous series
-        np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
-        new_quadratures = aligned_quadratures[1:] \
-                          - aligned_quadratures[:-1] #/ amplitude_drift[:-1, None]
+        # np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
+        new_quadratures = aligned_quadratures[1:] - aligned_quadratures[:-1]
         power = self.calc_power(new_quadratures) / 2
         return clutter, power
 
@@ -625,7 +626,7 @@ class ActiveHandler(Handler):
 
         if self.eval_clutter:
             for ch in channels:
-                cl, pwr = self.estimate_clutter(ch, quadratures[ch])
+                cl, pwr = self.estimate_clutter(quadratures[ch])
                 self.clutter[ch].append(cl)
                 self.power_no_clutter[ch].append(pwr)
 
@@ -665,7 +666,7 @@ class ActiveHandler(Handler):
 
 class LongPulseActiveHandler(ActiveHandler):
     """Class for processing of narrowband series (default channels_set 0, 2)"""
-    clutter_start_index = 50
+    clutter_start_index = 40
 
     def __init__(self, active_parameters: ActiveParameters,
                  filter_half_band=25000, n_fft=None, h_step=None,
