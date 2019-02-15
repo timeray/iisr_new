@@ -1,7 +1,7 @@
 import json
 import warnings
-from abc import ABCMeta, abstractmethod, abstractclassmethod
-from datetime import date, timedelta
+from abc import ABCMeta, abstractmethod
+from datetime import date, timedelta, datetime
 
 import numpy as np
 from scipy import fftpack
@@ -24,8 +24,9 @@ class HandlerResult(metaclass=ABCMeta):
     def save_txt(self, file: IO, save_date: date = None):
         """Save results to file. If save_date is passed, save specific date."""
 
-    @abstractclassmethod
-    def load_txt(self, file: List[IO]) -> 'HandlerResult':
+    @classmethod
+    @abstractmethod
+    def load_txt(cls, file: List[IO]) -> 'HandlerResult':
         """Load results from list of files."""
 
 
@@ -118,8 +119,9 @@ class HandlerParameters(metaclass=ABCMeta):
         params = json.loads(file.read(json_length), cls=ReprJSONDecoder)
         return params
 
-    @abstractclassmethod
-    def load_txt(self, file: TextIO):
+    @classmethod
+    @abstractmethod
+    def load_txt(cls, file: TextIO):
         """Load parameters from text file"""
 
     def save_txt(self, file: TextIO):
@@ -156,10 +158,14 @@ def timeout_filter(timeout) -> Generator[bool, TimeSeriesPackage, Any]:
             is_timeout = True
 
         elif time_diff < timedelta(0):
-            raise RuntimeError(
-                'New time mark is earlier than previous (new {}, prev {})'
-                ''.format(package.time_mark, prev_time_mark)
-            )
+            # Known issues
+            if package.time_mark.replace(second=0, microsecond=0) != datetime(2015, 6, 5, 1, 36):
+                is_timeout = True
+            else:
+                raise RuntimeError(
+                    'New time mark is earlier than previous (new {}, prev {})'
+                    ''.format(package.time_mark, prev_time_mark)
+                )
 
         else:
             is_timeout = False

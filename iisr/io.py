@@ -30,7 +30,8 @@ from iisr.representation import Channel, CHANNELS_INFO
 from iisr import units
 from iisr.units import Frequency, TimeUnit
 
-__all__ = ['DataFileReader', 'DataFileWriter', 'open_data_file', 'read_files_by']
+__all__ = ['DataFileReader', 'DataFileWriter', 'open_data_file', 'read_files_by',
+           'TimeSeriesPackage']
 ARCHIVE_EXTENSION = '.gz'
 FILE_EXTENSIONS = ('.ISE', '.ISE.GZ', '.IST', '.IST.GZ')
 DELAY_FORMULA_CONSTANT = -960 - 50
