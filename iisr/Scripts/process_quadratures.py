@@ -12,8 +12,7 @@ from iisr.preprocessing.run import LaunchConfig, run_processing
 from iisr import IISR_PATH
 from iisr.representation import Channel
 from iisr.units import Frequency, TimeUnit
-from typing import Callable, List
-
+from typing import Callable, List, Optional
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(message)s')
 DEFAULT_CONFIG_FILE = IISR_PATH / 'iisr' / 'default_active_preprocessing.ini'
@@ -38,6 +37,11 @@ def option_parser_decorator(parser: Callable) -> Callable:
             return parser(option)
 
     return _parser_wrapper
+
+
+@option_parser_decorator
+def _parse_optional_int(integer_string: str) -> int:
+    return int(integer_string)
 
 
 @option_parser_decorator
@@ -84,6 +88,7 @@ def main(argv=None):
     # Create LaunchConfig instance and pass it to processing
     launch_config = LaunchConfig(
         paths=_parse_path(config['Common']['paths']),
+        output_dir_prefix=config['Common']['output_folder_suffix'],
         n_accumulation=int(config['Common']['n_accumulation']),
         mode=config['Common']['mode'],
         channels=_parse_channels(config['Common']['channels']),
@@ -91,6 +96,7 @@ def main(argv=None):
         pulse_length=_parse_time_units(config['Common']['pulse_length']),
         accumulation_timeout=int(config['Common']['accumulation_timeout']),
         n_fft=int(config['Common']['n_fft']),
+        clutter_estimate_window=_parse_optional_int(config['Common']['clutter_estimate_window']),
     )
     run_processing(launch_config)
 

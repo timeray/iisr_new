@@ -19,7 +19,8 @@ from iisr.units import Frequency, TimeUnit
 class LaunchConfig:
     def __init__(self, paths: List[Path], mode: str, n_accumulation: int, channels: List[Channel],
                  frequencies: List[Frequency] = None, pulse_length: List[TimeUnit] = None,
-                 accumulation_timeout: Union[int, timedelta] = 60, n_fft: int = None):
+                 accumulation_timeout: Union[int, timedelta] = 60, n_fft: int = None,
+                 output_dir_prefix: str = '', clutter_estimate_window: int = None):
         """
         Create launch configuration. Check if input arguments are valid.
 
@@ -86,13 +87,21 @@ class LaunchConfig:
             raise ValueError('Incorrect accumulation timeout: {}'
                              ''.format(accumulation_timeout))
 
+        if clutter_estimate_window is not None:
+            if not isinstance(clutter_estimate_window, int) or clutter_estimate_window < 1:
+                raise ValueError('Incorrect clutter estimation window: {}'
+                                 ''.format(clutter_estimate_window))
+
         self.n_fft = n_fft
+        self.output_dir_suffix = output_dir_prefix
+        self.clutter_estimate_window = clutter_estimate_window
 
     def __str__(self):
         msg = [
             'Launch configuration',
             '--------------------',
             'Paths:\n{}'.format('\n'.join((str(path) for path in self.paths))),
+            'Output directory suffix: {}'.format(self.output_dir_suffix),
             'Mode: {}'.format(self.mode),
             'Number of accumulated samples: {}'.format(self.n_accumulation),
             'Channels: {}'.format(self.channels),
@@ -100,6 +109,7 @@ class LaunchConfig:
             'Pulse lengths: {} us'.format(self.pulse_length),
             'Accumulation timeout: {:.2f} s'.format(self.accumulation_timeout.total_seconds()),
             'FFT length: {}'.format(self.n_fft),
+            'Number of series to estimate clutter: {}'.format(self.clutter_estimate_window),
         ]
         return '\n'.join(msg)
 
@@ -133,7 +143,8 @@ def run_processing(config: LaunchConfig):
 
     # Initialize supervisor based on options
     if config.mode == 'incoherent':
-        supervisor = ActiveSupervisor(config.n_accumulation, timeout=config.accumulation_timeout)
+        supervisor = ActiveSupervisor(config.n_accumulation, timeout=config.accumulation_timeout,
+                                      clutter_estimate_window=config.clutter_estimate_window)
     elif config.mode == 'passive':
         supervisor = PassiveSupervisor(config.n_accumulation, config.n_fft,
                                        timeout=config.accumulation_timeout)
@@ -147,6 +158,6 @@ def run_processing(config: LaunchConfig):
     # Gather results from handlers and save them
     manager = DataManager()
     for result in results:
-        manager.save_preprocessing_result(result)
+        manager.save_preprocessing_result(result, save_dir_suffix=config.output_dir_suffix)
 
     logging.info('Processing successful. Elapsed time: {:.0f} s'.format(time.time() - start_time))

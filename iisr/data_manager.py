@@ -42,7 +42,7 @@ class DataManager:
         elif not self.main_folder.is_dir():
             raise NotADirectoryError('{}'.format(self.main_folder))
 
-    def save_preprocessing_result(self, result):
+    def save_preprocessing_result(self, result, save_dir_suffix=''):
         """
         Save first stage processing results.
 
@@ -62,7 +62,12 @@ class DataManager:
         for result_date in result.dates:
             date_str = result_date.strftime(DATE_FMT)
             filename = result.mode_name + '_' + name + '.dat'
-            dirpath = self.main_folder / date_str / self.PREPROCESSING_FOLDER_NAME
+            if save_dir_suffix:
+                save_dirname = self.PREPROCESSING_FOLDER_NAME + '_' + save_dir_suffix
+            else:
+                save_dirname = self.PREPROCESSING_FOLDER_NAME
+
+            dirpath = self.main_folder / date_str / save_dirname
 
             if not dirpath.exists():
                 dirpath.mkdir(parents=True)
