@@ -159,7 +159,10 @@ def timeout_filter(timeout) -> Generator[bool, TimeSeriesPackage, Any]:
 
         elif time_diff < timedelta(0):
             # Known issues
-            if package.time_mark.replace(second=0, microsecond=0) == datetime(2015, 6, 5, 1, 36):
+            test_time_mark = package.time_mark.replace(second=0, microsecond=0)
+            if test_time_mark == datetime(2015, 6, 5, 1, 36):
+                is_timeout = True
+            elif test_time_mark == datetime(2015, 6, 5, 13, 7):
                 is_timeout = True
             else:
                 raise RuntimeError(
