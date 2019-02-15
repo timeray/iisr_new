@@ -474,13 +474,14 @@ class ActiveHandler(Handler):
     clutter_start_index = NotImplemented
 
     def __init__(self, active_parameters: ActiveParameters,
-                 n_fft=None, h_step=None, eval_power=True, eval_coherence=False,
-                 eval_clutter=True):
+                 n_fft=None, h_step=None, clutter_estimate_window=1,
+                 eval_power=True, eval_coherence=False, eval_clutter=True):
         self.active_parameters = active_parameters
         self.channels = active_parameters.channels
 
         self.n_fft = n_fft
         self.h_step = h_step
+        self.clutter_estimate_window = clutter_estimate_window
 
         self.eval_power = eval_power
         self.eval_coherence = eval_coherence
@@ -592,8 +593,30 @@ class ActiveHandler(Handler):
 
         # Method: Subtract previous series
         # np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
-        new_quadratures = aligned_quadratures[1:] - aligned_quadratures[:-1]
-        power = self.calc_power(new_quadratures) / 2
+        # new_quadratures = aligned_quadratures[1:] - aligned_quadratures[:-1]
+
+        # Method: Subtract n-previous averaged series
+        clutter_window = self.clutter_estimate_window
+        n_times, n_samples = aligned_quadratures.shape
+        if clutter_window is None:
+            clutter_window = n_times  # later we will scale power based on this number
+
+        if clutter_window == n_times:
+            new_quadratures = aligned_quadratures - clutter
+        else:
+            strided_shape = (n_times - clutter_window, clutter_window, n_samples)
+            strides = aligned_quadratures.strides
+            new_strides = (strides[0], strides[0], strides[1])
+
+            # Average n series, for each time bin. This gives (n_times - window) new time bins
+            clutter_estimate = np.lib.stride_tricks.as_strided(
+                aligned_quadratures, shape=strided_shape, strides=new_strides
+            ).mean(axis=1)
+            # Subtract clutter, starting from clutter_estimate_window
+            new_quadratures = aligned_quadratures[clutter_window:] - clutter_estimate
+
+        # N-previous averaged series add 1 / n additional incoherent power
+        power = self.calc_power(new_quadratures) / (1 + 1 / clutter_window)
         return clutter, power
 
     def handle(self, batch: ActiveBatch):
@@ -669,10 +692,11 @@ class LongPulseActiveHandler(ActiveHandler):
     clutter_start_index = 40
 
     def __init__(self, active_parameters: ActiveParameters,
-                 filter_half_band=25000, n_fft=None, h_step=None,
+                 filter_half_band=25000, n_fft=None, h_step=None, clutter_estimate_window=1,
                  eval_power=True, eval_coherence=False,
                  apply_lowpass_filter=False):
-        super().__init__(active_parameters, n_fft, h_step, eval_power, eval_coherence)
+        super().__init__(active_parameters, n_fft, h_step, clutter_estimate_window,
+                         eval_power, eval_coherence)
         self._filter = None
         self.filter_half_band = filter_half_band
         self.apply_lowpass_filter = apply_lowpass_filter
@@ -701,8 +725,10 @@ class ShortPulseActiveHandler(ActiveHandler):
     clutter_start_index = 120
 
     def __init__(self, active_parameters: ActiveParameters,
-                 n_fft=None, h_step=None, eval_power=True, eval_coherence=False):
-        super().__init__(active_parameters, n_fft, h_step, eval_power, eval_coherence)
+                 n_fft=None, h_step=None, clutter_estimate_window=1,
+                 eval_power=True, eval_coherence=False):
+        super().__init__(active_parameters, n_fft, h_step, clutter_estimate_window,
+                         eval_power, eval_coherence)
 
         params = self.active_parameters
         dlength = params.pulse_length['us'] * params.sampling_frequency['MHz']
@@ -727,7 +753,7 @@ class ActiveSupervisor(Supervisor):
     AggYieldType = Tuple[ActiveParameters, ActiveBatch]
 
     def __init__(self, n_accumulation: int, timeout: timedelta,
-                 n_fft: int = None, h_step: float = None,
+                 n_fft: int = None, h_step: float = None, clutter_estimate_window=1,
                  eval_power: bool = True, eval_coherence: bool = False,
                  narrow_filter_half_band=25000):
         """
@@ -741,6 +767,7 @@ class ActiveSupervisor(Supervisor):
         self.n_fft = n_fft
         self.h_step = h_step
         self.narrow_filter_half_band = narrow_filter_half_band
+        self.clutter_estimate_window = clutter_estimate_window
 
         self.eval_power = eval_power
         self.eval_coherence = eval_coherence
@@ -849,6 +876,7 @@ class ActiveSupervisor(Supervisor):
                 active_parameters=parameters,
                 n_fft=self.n_fft,
                 h_step=self.h_step,
+                clutter_estimate_window=self.clutter_estimate_window,
                 eval_power=self.eval_power,
                 eval_coherence=self.eval_coherence
             )
@@ -858,6 +886,7 @@ class ActiveSupervisor(Supervisor):
                 filter_half_band=self.narrow_filter_half_band,
                 n_fft=self.n_fft,
                 h_step=self.h_step,
+                clutter_estimate_window=self.clutter_estimate_window,
                 eval_power=self.eval_power,
                 eval_coherence=self.eval_coherence
             )
