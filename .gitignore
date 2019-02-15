@@ -3,3 +3,4 @@ __pycache__
 *.mp4
 *.avi
 *.png
+pre_processing_config.ini
