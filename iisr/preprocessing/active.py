@@ -555,8 +555,13 @@ class ActiveHandler(Handler):
         logging.info(msg)
 
         # Clutter and power should be calculated using quadratures with high correlation
-        # aligned_quadratures = quadratures[mask] * np.exp(1j * corr_phase[mask, None])
-        aligned_quadratures = quadratures[mask]
+        if self.active_parameters.frequency['MHz'] > 159:
+            # Clutter at frequencies > 159 is stronger and its phase is more expressed.
+            # In this case we are able to align phases of all series
+            aligned_quadratures = quadratures[mask] * np.exp(1j * corr_phase[mask, None])
+        else:
+            # Otherwise, phase is much noisier and alignment may degrade results
+            aligned_quadratures = quadratures[mask]
 
         clutter = aligned_quadratures.mean(axis=0)
 
