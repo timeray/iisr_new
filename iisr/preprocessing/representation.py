@@ -1,5 +1,6 @@
 import json
 import warnings
+import logging
 from abc import ABCMeta, abstractmethod
 from datetime import date, timedelta, datetime
 
@@ -137,12 +138,21 @@ class HandlerParameters(metaclass=ABCMeta):
         file.write('\n')
 
 
-def timeout_filter(timeout) -> Generator[bool, TimeSeriesPackage, Any]:
+def timeout_filter(timeout, invalid_time_mark_policy: str = 'yield_timeout'
+                   ) -> Generator[bool, TimeSeriesPackage, Any]:
     """Coroutine to check if time difference between consequent packages exceeds timeout.
+
+    Args:
+        invalid_time_mark_policy: Determine policy when new time mark is earlier than previous:
+            'yield_timeout' - yield timeout flag; error message will be logged.
+            'raise_exception' - raise exception
+
 
     Yields:
         is_timeout: If timeout occur at given package.
     """
+    assert invalid_time_mark_policy in ['yield_timeout', 'raise_exception']
+
     prev_time_mark = None
     is_timeout = False
 
@@ -165,11 +175,13 @@ def timeout_filter(timeout) -> Generator[bool, TimeSeriesPackage, Any]:
             elif test_time_mark == datetime(2015, 6, 5, 13, 7):
                 is_timeout = True
             else:
-                raise RuntimeError(
-                    'New time mark is earlier than previous (new {}, prev {})'
-                    ''.format(package.time_mark, prev_time_mark)
-                )
-
+                err_msg = 'New time mark is earlier than previous (new {}, prev {})'\
+                          ''.format(package.time_mark, prev_time_mark)
+                if invalid_time_mark_policy == 'yield_timeout':
+                    is_timeout = True
+                    logging.info(err_msg)
+                else:
+                    raise RuntimeError(err_msg)
         else:
             is_timeout = False
 

@@ -571,7 +571,6 @@ class ActiveHandler(Handler):
                           / clutter_norm
         amplitude_drift = amplitude_drift.real  # assume phase is already correct
 
-        #
         # # Method: Subtract mean of all series
         # power = self.calc_power(aligned_quadratures - amplitude_drift[:, None] * clutter)
         #

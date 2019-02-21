@@ -702,7 +702,7 @@ class DataFileReader(DataFileIO):
                 self._time_lag_diff = None
             else:
                 raise RuntimeError('Unable to fix time bug: expected ~8 hour back shift, '
-                                   'when return to a normal mode')
+                                   'on return to a normal mode')
 
         self._prev_time = current_time_mark
         return new_time_mark
