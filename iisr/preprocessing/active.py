@@ -475,6 +475,7 @@ class ActiveHandler(Handler):
 
     def __init__(self, active_parameters: ActiveParameters,
                  n_fft=None, h_step=None, clutter_estimate_window=1,
+                 clutter_drift_compensation=False,
                  eval_power=True, eval_coherence=False, eval_clutter=True):
         self.active_parameters = active_parameters
         self.channels = active_parameters.channels
@@ -546,14 +547,6 @@ class ActiveHandler(Handler):
         # mask &= (mid_range_power - mid_range_power[mask].mean()) < mid_range_power[mask].std() * 3
         mask &= ~outlier_filter(mid_range_power).mask
 
-        msg = 'processing stats: {}, {}, dropped quadratures: {:.2f}%'.format(
-            self.active_parameters.frequency, self.active_parameters.pulse_length,
-            mask.sum() / mask.size * 100
-        )
-        if best_idx != 0:
-            msg += ', pick {} quadrature as reference'.format(test_idx)
-        logging.info(msg)
-
         # Clutter and power should be calculated using quadratures with high correlation
         if self.active_parameters.frequency['MHz'] > 159:
             # Clutter at frequencies > 159 is stronger and its phase is more expressed.
@@ -570,34 +563,8 @@ class ActiveHandler(Handler):
                            * clutter[dist_mask].conj()).sum(axis=1) \
                           / clutter_norm
         amplitude_drift = amplitude_drift.real  # assume phase is already correct
-
-        # # Method: Subtract mean of all series
-        # power = self.calc_power(aligned_quadratures - amplitude_drift[:, None] * clutter)
-        #
-        # # Calculate pearson correlation matrix
-        # clut_pwr = np.abs(aligned_quadratures[:, dist_mask])**2
-        # corr_matrix = np.corrcoef(clut_pwr)
-        #
-        # # Method: Subtract closest series
-        # max_corr_args = np.abs(corr_matrix).argsort(axis=0)[-2]
-        #
-        # power = self.calc_power(
-        #     aligned_quadratures
-        #     - aligned_quadratures[max_corr_args] / amplitude_drift[max_corr_args, None]
-        # )
-        # power /= 2
-
-        # # Method: Subtract mean of 10 closest series
-        # batch_max_corr_args = corr_matrix.argsort(axis=0)[-12:-2]
-        #
-        # clutter_corr = (aligned_quadratures[batch_max_corr_args]
-        #                 / amplitude_drift[batch_max_corr_args, None]).mean(axis=0)
-        #
-        # pair_power10 = self.calc_power(aligned_quadratures - clutter_corr)
-
-        # Method: Subtract previous series
-        # np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
-        # new_quadratures = aligned_quadratures[1:] - aligned_quadratures[:-1]
+        # Clip excessive values of amplitude drift that appear when there is noise in some series
+        np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
 
         # Method: Subtract n-previous averaged series
         clutter_window = self.clutter_estimate_window
@@ -619,8 +586,24 @@ class ActiveHandler(Handler):
             # Subtract clutter, starting from clutter_estimate_window
             new_quadratures = aligned_quadratures[clutter_window:] - clutter_estimate
 
+        clutter_range_power = self.calc_power(np.abs(new_quadratures[:, dist_mask]), axis=1)
+        additional_mask = ~outlier_filter(clutter_range_power).mask
+
+        # Logging messages
+        overall_drop = additional_mask.sum() / mask.size * 100
+        dropped_at_first_step = 100 - mask.sum() / mask.size * 100
+        dropped_at_second_step = 100 - overall_drop - dropped_at_first_step
+        msg = 'processing stats: {}, {}, dropped quadratures: {:.2f}% ' \
+              '(first step: {:.2f}%, second step: {:.2f}%)'.format(
+            self.active_parameters.frequency, self.active_parameters.pulse_length,
+            overall_drop, dropped_at_first_step, dropped_at_second_step
+        )
+        if best_idx != 0:
+            msg += ', pick {} quadrature as reference'.format(test_idx)
+        logging.info(msg)
+
         # N-previous averaged series add 1 / n additional incoherent power
-        power = self.calc_power(new_quadratures) / (1 + 1 / clutter_window)
+        power = self.calc_power(new_quadratures[additional_mask]) / (1 + 1 / clutter_window)
         return clutter, power
 
     def handle(self, batch: ActiveBatch):
@@ -697,10 +680,10 @@ class LongPulseActiveHandler(ActiveHandler):
 
     def __init__(self, active_parameters: ActiveParameters,
                  filter_half_band=25000, n_fft=None, h_step=None, clutter_estimate_window=1,
-                 eval_power=True, eval_coherence=False,
+                 clutter_drift_compensation=False, eval_power=True, eval_coherence=False,
                  apply_lowpass_filter=False):
         super().__init__(active_parameters, n_fft, h_step, clutter_estimate_window,
-                         eval_power, eval_coherence)
+                         clutter_drift_compensation, eval_power, eval_coherence)
         self._filter = None
         self.filter_half_band = filter_half_band
         self.apply_lowpass_filter = apply_lowpass_filter
@@ -730,9 +713,10 @@ class ShortPulseActiveHandler(ActiveHandler):
 
     def __init__(self, active_parameters: ActiveParameters,
                  n_fft=None, h_step=None, clutter_estimate_window=1,
+                 clutter_drift_compensation=False,
                  eval_power=True, eval_coherence=False):
         super().__init__(active_parameters, n_fft, h_step, clutter_estimate_window,
-                         eval_power, eval_coherence)
+                         clutter_drift_compensation, eval_power, eval_coherence)
 
         params = self.active_parameters
         dlength = params.pulse_length['us'] * params.sampling_frequency['MHz']
@@ -758,6 +742,7 @@ class ActiveSupervisor(Supervisor):
 
     def __init__(self, n_accumulation: int, timeout: timedelta,
                  n_fft: int = None, h_step: float = None, clutter_estimate_window=1,
+                 clutter_drift_compensation=False,
                  eval_power: bool = True, eval_coherence: bool = False,
                  narrow_filter_half_band=25000):
         """
@@ -772,6 +757,7 @@ class ActiveSupervisor(Supervisor):
         self.h_step = h_step
         self.narrow_filter_half_band = narrow_filter_half_band
         self.clutter_estimate_window = clutter_estimate_window
+        self.clutter_drift_compensation = clutter_drift_compensation
 
         self.eval_power = eval_power
         self.eval_coherence = eval_coherence
@@ -880,6 +866,7 @@ class ActiveSupervisor(Supervisor):
                 active_parameters=parameters,
                 n_fft=self.n_fft,
                 h_step=self.h_step,
+                clutter_drift_compensation=self.clutter_drift_compensation,
                 clutter_estimate_window=self.clutter_estimate_window,
                 eval_power=self.eval_power,
                 eval_coherence=self.eval_coherence
@@ -890,6 +877,7 @@ class ActiveSupervisor(Supervisor):
                 filter_half_band=self.narrow_filter_half_band,
                 n_fft=self.n_fft,
                 h_step=self.h_step,
+                clutter_drift_compensation=self.clutter_drift_compensation,
                 clutter_estimate_window=self.clutter_estimate_window,
                 eval_power=self.eval_power,
                 eval_coherence=self.eval_coherence

@@ -20,7 +20,8 @@ class LaunchConfig:
     def __init__(self, paths: List[Path], mode: str, n_accumulation: int, channels: List[Channel],
                  frequencies: List[Frequency] = None, pulse_length: List[TimeUnit] = None,
                  accumulation_timeout: Union[int, timedelta] = 60, n_fft: int = None,
-                 output_dir_prefix: str = '', clutter_estimate_window: int = None):
+                 output_dir_prefix: str = '', clutter_estimate_window: int = None,
+                 clutter_drift_compensation: bool = False):
         """
         Create launch configuration. Check if input arguments are valid.
 
@@ -95,6 +96,7 @@ class LaunchConfig:
         self.n_fft = n_fft
         self.output_dir_suffix = output_dir_prefix
         self.clutter_estimate_window = clutter_estimate_window
+        self.clutter_drift_compensation = clutter_drift_compensation
 
     def __str__(self):
         msg = [
@@ -110,6 +112,8 @@ class LaunchConfig:
             'Accumulation timeout: {:.2f} s'.format(self.accumulation_timeout.total_seconds()),
             'FFT length: {}'.format(self.n_fft),
             'Number of series to estimate clutter: {}'.format(self.clutter_estimate_window),
+            'Compensate for amplitude drift during clutter subtraction: {}'
+            ''.format(self.clutter_drift_compensation),
         ]
         return '\n'.join(msg)
 
@@ -144,6 +148,7 @@ def run_processing(config: LaunchConfig):
     # Initialize supervisor based on options
     if config.mode == 'incoherent':
         supervisor = ActiveSupervisor(config.n_accumulation, timeout=config.accumulation_timeout,
+                                      clutter_drift_compensation=config.clutter_drift_compensation,
                                       clutter_estimate_window=config.clutter_estimate_window)
     elif config.mode == 'passive':
         supervisor = PassiveSupervisor(config.n_accumulation, config.n_fft,

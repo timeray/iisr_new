@@ -44,6 +44,16 @@ def _parse_optional_int(integer_string: str) -> int:
     return int(integer_string)
 
 
+def _parse_boolean(string: str) -> bool:
+    string = string.lower()
+    if string == 'true':
+        return True
+    elif string == 'false':
+        return False
+    else:
+        raise ValueError('Incorrect boolean string: "{}"'.format(string))
+
+
 @option_parser_decorator
 def _parse_path(paths: str) -> List[Path]:
     return [Path(path.strip()) for path in paths.split(SEPARATOR)]
@@ -97,6 +107,9 @@ def main(argv=None):
         accumulation_timeout=int(config['Common']['accumulation_timeout']),
         n_fft=int(config['Common']['n_fft']),
         clutter_estimate_window=_parse_optional_int(config['Common']['clutter_estimate_window']),
+        clutter_drift_compensation=_parse_boolean(
+            config['Common']['clutter_amplitude_drift_compensation']
+        ),
     )
     run_processing(launch_config)
 
