@@ -472,6 +472,7 @@ class ActiveBatch(HandlerBatch):
 class ActiveHandler(Handler):
     """Abstract class for active processing"""
     clutter_start_index = NotImplemented
+    clutter_stop_height = NotImplemented
 
     def __init__(self, active_parameters: ActiveParameters,
                  n_fft=None, h_step=None, clutter_estimate_window=1,
@@ -502,7 +503,7 @@ class ActiveHandler(Handler):
         # Find k[i], i = 0..N-1, N-1 - number of realizations in the batch
         # (k maximize sum of current and previous realizations)
         sidx = self.clutter_start_index
-        stop_distance_km = 300
+        stop_distance_km = self.clutter_stop_height
 
         dist = self.active_parameters.distance['km']
         dist_mask = dist < stop_distance_km
@@ -541,7 +542,7 @@ class ActiveHandler(Handler):
         #         < clutter_range_power[mask].std() * 3
         mask &= ~outlier_filter(clutter_range_power).mask
 
-        mid_dist_mask = (dist >= 250) & (dist <= stop_distance_km)
+        mid_dist_mask = (dist >= 230) & (dist <= stop_distance_km)
         mid_range_power = self.calc_power(np.abs(quadratures[:, mid_dist_mask]), axis=1)
 
         # mask &= (mid_range_power - mid_range_power[mask].mean()) < mid_range_power[mask].std() * 3
@@ -677,6 +678,7 @@ class ActiveHandler(Handler):
 class LongPulseActiveHandler(ActiveHandler):
     """Class for processing of narrowband series (default channels_set 0, 2)"""
     clutter_start_index = 40
+    clutter_stop_height = 250
 
     def __init__(self, active_parameters: ActiveParameters,
                  filter_half_band=25000, n_fft=None, h_step=None, clutter_estimate_window=1,
@@ -709,7 +711,8 @@ class LongPulseActiveHandler(ActiveHandler):
 
 class ShortPulseActiveHandler(ActiveHandler):
     """Class for processing of wideband series (default channels_set 1, 3)"""
-    clutter_start_index = 120
+    clutter_start_index = 100
+    clutter_stop_height = 250
 
     def __init__(self, active_parameters: ActiveParameters,
                  n_fft=None, h_step=None, clutter_estimate_window=1,
