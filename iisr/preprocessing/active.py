@@ -567,7 +567,7 @@ class ActiveHandler(Handler):
         if clutter_window == n_times:
             new_quadratures = aligned_quadratures - clutter
         else:
-            strided_shape = (n_times - clutter_window, clutter_window, n_samples)
+            strided_shape = (max(n_times - clutter_window, 0), clutter_window, n_samples)
             strides = aligned_quadratures.strides
             new_strides = (strides[0], strides[0], strides[1])
 
