@@ -5,7 +5,7 @@ from enum import Enum
 import numpy as np
 from typing import List, TextIO, Dict, IO, Iterator, Tuple, Generator, Any
 
-from iisr.io import FileInfo, TimeSeriesPackage, TimeSeries
+from iisr.iisr_io import FileInfo, TimeSeriesPackage, TimeSeries
 from iisr.preprocessing.representation import HandlerResult, Handler, HandlerParameters, \
     Supervisor, timeout_filter, HandlerBatch
 from iisr.representation import Channel

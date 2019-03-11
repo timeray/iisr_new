@@ -6,7 +6,7 @@ from unittest import main, TestCase
 
 import numpy as np
 
-from iisr.io import ExperimentParameters
+from iisr.iisr_io import ExperimentParameters
 from iisr.preprocessing.active import *
 from iisr.preprocessing.active import ActiveHandler, ActiveBatch, ActiveSupervisor
 from iisr.preprocessing.tests.utils import get_test_param_list, package_generator

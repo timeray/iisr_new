@@ -8,7 +8,7 @@ import numpy as np
 from scipy import fftpack
 from typing import IO, List, TextIO, Union, Generator, Any, Iterator, Tuple
 
-from iisr.io import TimeSeriesPackage
+from iisr.iisr_io import TimeSeriesPackage
 from iisr.representation import ReprJSONEncoder, ReprJSONDecoder
 
 

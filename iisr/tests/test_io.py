@@ -8,7 +8,7 @@ from iisr.units import Frequency, TimeUnit
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import TestCase, main, mock
-from iisr import io
+from iisr import iisr_io
 import numpy as np
 
 
@@ -18,7 +18,7 @@ DEFAULT_DATETIME = datetime(2015, 6, 7, 10, 55, 37, 437000)
 
 
 def get_file_info(field1=0, field2=0, version=0, field4=0):
-    return io.FileInfo(field1, field2, version, field4)
+    return iisr_io.FileInfo(field1, field2, version, field4)
 
 
 def get_test_raw_parameters(freq=155000, pulse_len=700, stel='st1', channel=0, year=2015, month=6,
@@ -47,19 +47,19 @@ def get_test_raw_parameters(freq=155000, pulse_len=700, stel='st1', channel=0, y
         'version': 3
     }
     # Encode
-    test_raw_parameters = {io.RAW_NAME_TO_CODE[name]: value
+    test_raw_parameters = {iisr_io.RAW_NAME_TO_CODE[name]: value
                            for name, value in test_raw_parameters.items()}
     return test_raw_parameters
 
 
 def get_test_parameters(n_samples=2048, freq=155.5, pulse_len=700,
                         sampling_freq=1., channel=0, phase_code=0, total_delay=1000,
-                        antenna_end='st1', file_info=None) -> io.SeriesParameters:
+                        antenna_end='st1', file_info=None) -> iisr_io.SeriesParameters:
     if file_info is None:
         file_info = get_file_info()
-    global_params = io.ExperimentParameters(Frequency(sampling_freq, 'MHz'), n_samples,
-                                            TimeUnit(total_delay, 'us'))
-    test_parameters = io.SeriesParameters(
+    global_params = iisr_io.ExperimentParameters(Frequency(sampling_freq, 'MHz'), n_samples,
+                                                 TimeUnit(total_delay, 'us'))
+    test_parameters = iisr_io.SeriesParameters(
         file_info, global_params, Channel(channel), Frequency(freq, 'MHz'),
         TimeUnit(pulse_len, 'us'), phase_code, antenna_end=antenna_end
     )
@@ -67,14 +67,14 @@ def get_test_parameters(n_samples=2048, freq=155.5, pulse_len=700,
 
 
 def get_test_signal_time_series(time_mark=datetime(2015, 6, 7, 8, 9, 10, 11), test_params=None,
-                                **param_kwargs) -> io.TimeSeries:
+                                **param_kwargs) -> iisr_io.TimeSeries:
     if test_params is None:
         test_params = get_test_parameters(**param_kwargs)
 
     quad_i = np.random.randint(-100, 100, test_params.n_samples)
     quad_q = np.random.randint(-100, 100, test_params.n_samples)
     quadratures = quad_i + 1j * quad_q
-    time_series = io.TimeSeries(time_mark, test_params, quadratures)
+    time_series = iisr_io.TimeSeries(time_mark, test_params, quadratures)
     return time_series
 
 
@@ -106,12 +106,12 @@ def make_random_test_file(n_unique_series=2, n_time_marks=2, time_step_sec=1):
             quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
             quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
             quadratures = quad_i + 1j * quad_q
-            series = io.TimeSeries(time_mark, parameters, quadratures)
+            series = iisr_io.TimeSeries(time_mark, parameters, quadratures)
             series_list.append(series)
 
     with tempfile.TemporaryDirectory() as temp_dirname:
         file_path = Path(temp_dirname) / DUMMY_FILE_NAME
-        with io.open_data_file(file_path, 'w') as writer:
+        with iisr_io.open_data_file(file_path, 'w') as writer:
             for series in series_list:
                 writer.write(series)
 
@@ -169,8 +169,8 @@ class TestTimeSeriesPackage(TestCase):
     def test_init(self):
         test_time_series1 = get_test_signal_time_series()
         test_time_series2 = get_test_signal_time_series()
-        package = io.TimeSeriesPackage(test_time_series1.time_mark,
-                                       [test_time_series1, test_time_series2])
+        package = iisr_io.TimeSeriesPackage(test_time_series1.time_mark,
+                                            [test_time_series1, test_time_series2])
 
         for series, test_series in zip(package, [test_time_series1, test_time_series2]):
             self.assertEqual(series, test_series)
@@ -184,27 +184,27 @@ class TestTimeSeriesPackage(TestCase):
         test_time_series2 = get_test_signal_time_series()
         test_time_series2.time_mark = datetime(2016, 3, 4, 6, 2, 55, 3123)
         with self.assertRaises(ValueError):
-            io.TimeSeriesPackage(test_time_series1.time_mark,
-                                 [test_time_series1, test_time_series2])
+            iisr_io.TimeSeriesPackage(test_time_series1.time_mark,
+                                      [test_time_series1, test_time_series2])
 
     def test_empty(self):
         with self.assertRaises(ValueError):
-            io.TimeSeriesPackage(datetime(2000, 1, 1), [])
+            iisr_io.TimeSeriesPackage(datetime(2000, 1, 1), [])
 
 
 class TestGetAntennaEnd(TestCase):
     def test(self):
         for test_ant_end in ['st1', 'st2']:
             raw_params = {'{}_long_fr_lo'.format(test_ant_end): 1}
-            ant_end = io._get_antenna_end(raw_params)
+            ant_end = iisr_io._get_antenna_end(raw_params)
             self.assertEqual(test_ant_end, ant_end, test_ant_end)
 
         with self.assertRaises(ValueError):
-            io._get_antenna_end({})
+            iisr_io._get_antenna_end({})
 
         raw_params = {'st1_long_fr_lo': 1, 'st2_long_fr_lo': 2}
         with self.assertRaises(ValueError):
-            io._get_antenna_end(raw_params)
+            iisr_io._get_antenna_end(raw_params)
 
 
 class TestParseFilename(TestCase):
@@ -212,15 +212,15 @@ class TestParseFilename(TestCase):
         dtime = datetime(2015, 2, 2, 14, 15)
         fields = [dtime.strftime('%Y%m%d_%H%M')]
         fields.extend(['0000', '001', '0002', '003'])
-        test_file_info = io.FileInfo(0, 1, 2, 3)
+        test_file_info = iisr_io.FileInfo(0, 1, 2, 3)
         filename = '_'.join(fields)
-        file_dtime, file_info = io.parse_filename(filename)
+        file_dtime, file_info = iisr_io.parse_filename(filename)
         self.assertEqual(dtime, file_dtime)
         self.assertEqual(test_file_info, file_info)
 
         wrong_filename = 'test_name.ise'
-        with self.assertRaises(io.InvalidFilenameError):
-            io.parse_filename(wrong_filename)
+        with self.assertRaises(iisr_io.InvalidFilenameError):
+            iisr_io.parse_filename(wrong_filename)
 
 
 class TestParametersTransformation(TestCase):
@@ -237,7 +237,7 @@ class TestParametersTransformation(TestCase):
 
         raw_params = get_test_raw_parameters(year=year, month=month, day=day, hour=hour,
                                              minute=minute, second=second, millisecond=millisecond)
-        ref_params, _ = io._raw2refined_parameters(raw_params, 4096, get_file_info())
+        ref_params, _ = iisr_io._raw2refined_parameters(raw_params, 4096, get_file_info())
         self.assertEqual(test_dtime, ref_params)
 
     def test_reciprocity(self):
@@ -246,9 +246,9 @@ class TestParametersTransformation(TestCase):
         test_file_info = get_file_info()
 
         # Need to copy options, because transformation change input dictionary
-        result = io._raw2refined_parameters(test_raw_parameters.copy(), test_byte_length,
-                                            test_file_info)
-        raw_parameters, byte_length = io._refined2raw_parameters(*result)
+        result = iisr_io._raw2refined_parameters(test_raw_parameters.copy(), test_byte_length,
+                                                 test_file_info)
+        raw_parameters, byte_length = iisr_io._refined2raw_parameters(*result)
         self.assertEqual(test_byte_length, byte_length)
 
         # Refined parameters contain only minimal amount of information from raw parameters
@@ -257,13 +257,13 @@ class TestParametersTransformation(TestCase):
                         'date_year', 'date_mon_day', 'time_h_m', 'time_sec', 'time_msec',
                         'st1_long_fr_lo', 'st1_long_fr_hi', 'st1_long_len']
         for param in equal_params:
-            code = io.RAW_NAME_TO_CODE[param]
+            code = iisr_io.RAW_NAME_TO_CODE[param]
             self.assertEqual(test_raw_parameters[code], raw_parameters[code])
 
 
 class TestSeriesSelector(TestCase):
     def test(self):
-        trivial_filter = io.SeriesSelector()
+        trivial_filter = iisr_io.SeriesSelector()
 
         valid_params = {
             'frequencies': [Frequency(155.5, 'MHz'), Frequency(159.5, 'MHz')],
@@ -271,7 +271,7 @@ class TestSeriesSelector(TestCase):
             'pulse_lengths': [TimeUnit(200, 'us'), TimeUnit(700, 'us')],
             'pulse_types': None,
         }
-        specific_filter = io.SeriesSelector(**valid_params)
+        specific_filter = iisr_io.SeriesSelector(**valid_params)
 
         for fr, ch, len_ in it.product([155500, 159500], [0, 2], [200, 700]):
             raw_params = get_test_raw_parameters(freq=fr, pulse_len=len_, channel=ch)
@@ -290,7 +290,7 @@ class TestSeriesSelector(TestCase):
             'channels': [Channel(0), Channel(1)],
             'pulse_types': 'long',
         }
-        specific_filter = io.SeriesSelector(**valid_params)
+        specific_filter = iisr_io.SeriesSelector(**valid_params)
         for fr, ch, len_ in it.product([155500, 159500], [0, 2], [200, 700]):
             raw_params = get_test_raw_parameters(freq=fr, pulse_len=len_, channel=ch)
 
@@ -298,11 +298,11 @@ class TestSeriesSelector(TestCase):
                              'fr={}, ch={}, len_={}'.format(fr, ch, len_))
 
     def test_time_validation(self):
-        trivial_selector = io.SeriesSelector()
-        start_selector = io.SeriesSelector(start_time=datetime(2015, 6, 6))
-        stop_selector = io.SeriesSelector(stop_time=datetime(2015, 6, 8))
-        start_stop_selector = io.SeriesSelector(start_time=datetime(2015, 6, 6),
-                                                stop_time=datetime(2015, 6, 8))
+        trivial_selector = iisr_io.SeriesSelector()
+        start_selector = iisr_io.SeriesSelector(start_time=datetime(2015, 6, 6))
+        stop_selector = iisr_io.SeriesSelector(stop_time=datetime(2015, 6, 8))
+        start_stop_selector = iisr_io.SeriesSelector(start_time=datetime(2015, 6, 6),
+                                                     stop_time=datetime(2015, 6, 8))
 
         dtime = datetime(2015, 1, 1)
         self.assertTrue(trivial_selector.validate_time_mark(dtime))
@@ -326,11 +326,11 @@ class TestSeriesSelector(TestCase):
 class TestRead(TestCase):
     def test_read(self):
         with make_random_test_file() as (test_file_path, test_series_list), \
-                io.open_data_file(test_file_path) as reader:
+                iisr_io.open_data_file(test_file_path) as reader:
 
             series = next(reader.read_series())
             self.assertIsInstance(series.time_mark, datetime)
-            self.assertIsInstance(series.parameters, io.SeriesParameters)
+            self.assertIsInstance(series.parameters, iisr_io.SeriesParameters)
             self.assertEqual(series.time_mark, test_series_list[0].time_mark)
             self.assertEqual(series.parameters, test_series_list[0].parameters)
 
@@ -344,7 +344,7 @@ class TestRead(TestCase):
             'pulse_lengths': [TimeUnit(200, 'us')],
             'pulse_types': ['long'],
         }
-        filter_ = io.SeriesSelector(**valid_params)
+        filter_ = iisr_io.SeriesSelector(**valid_params)
 
         test_parameters = []
         for fr, ch, len_ in it.product([155.5, 159.5], [0, 2], [200, 700]):
@@ -353,18 +353,18 @@ class TestRead(TestCase):
         with tempfile.TemporaryDirectory() as dirname:
             test_filepath = Path(dirname) / DUMMY_FILE_NAME
 
-            with io.open_data_file(test_filepath, 'w') as data_file:
+            with iisr_io.open_data_file(test_filepath, 'w') as data_file:
                 for param in test_parameters:
                     n_samples = param.n_samples
                     test_quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
                     test_quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
                     test_quadratures = test_quad_i + 1j * test_quad_q
 
-                    series = io.TimeSeries(DEFAULT_DATETIME, param, test_quadratures)
+                    series = iisr_io.TimeSeries(DEFAULT_DATETIME, param, test_quadratures)
                     data_file.write(series)
 
             # Check if selector correct
-            with io.open_data_file(test_filepath, series_selector=filter_) as reader:
+            with iisr_io.open_data_file(test_filepath, series_selector=filter_) as reader:
                 series_list = list(reader)
 
             self.assertEqual(len(series_list), 2)
@@ -375,11 +375,11 @@ class TestRead(TestCase):
                 self.assertEqual(series.parameters.pulse_type, valid_params['pulse_types'][0])
 
     def test_read_real_file(self):
-        with io.open_data_file(TEST_REAL_FILEPATH) as data_file:
+        with iisr_io.open_data_file(TEST_REAL_FILEPATH) as data_file:
             series_list = list(data_file)
         self.assertEqual(len(series_list), 100)
 
-        first_series = series_list[0]  # type: io.TimeSeries
+        first_series = series_list[0]  # type: iisr_io.TimeSeries
         self.assertEqual(first_series.time_mark.year, 2015)
         self.assertEqual(first_series.time_mark.month, 6)
         self.assertEqual(first_series.time_mark.day, 6)
@@ -419,11 +419,11 @@ class TestWriteRead(TestCase):
             test_quad_q = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
             test_quadratures = test_quad_i + 1j * test_quad_q
 
-            test_series = io.TimeSeries(time_mark, test_parameters, test_quadratures)
-            with io.open_data_file(test_file_path, 'w') as writer:
+            test_series = iisr_io.TimeSeries(time_mark, test_parameters, test_quadratures)
+            with iisr_io.open_data_file(test_file_path, 'w') as writer:
                 writer.write(test_series)
 
-            with io.open_data_file(test_file_path, 'r') as reader:
+            with iisr_io.open_data_file(test_file_path, 'r') as reader:
                 series = next(reader.read_series())
 
         # Time
@@ -476,15 +476,15 @@ class TestDataFileReaderTimeBugFix(TestCase):
             test_series = []
             for time_mark in time_marks:
                 for params in test_parameters:
-                    test_series.append(io.TimeSeries(time_mark, params, test_quadratures))
+                    test_series.append(iisr_io.TimeSeries(time_mark, params, test_quadratures))
 
-            with io.open_data_file(test_file_path, 'w') as writer:
+            with iisr_io.open_data_file(test_file_path, 'w') as writer:
                 for series in test_series:
                     writer.write(series)
 
             with open(str(test_file_path), 'rb') as file:
-                reader = io.DataFileReader(file, file_info=get_file_info(),
-                                           fix_time_lag_bug=fix_time_bug)
+                reader = iisr_io.DataFileReader(file, file_info=get_file_info(),
+                                                fix_time_lag_bug=fix_time_bug)
                 read_series = list(reader.read_series())
 
             self.assertEqual(self.n_marks * len(self.channels), len(read_series))
@@ -537,20 +537,20 @@ class TestDataFileReaderTimeBugFix(TestCase):
 class TestReadFiles(TestCase):
     def test_read_by_series(self):
         with make_random_test_file() as (test_file_path, test_series_list),  \
-                io.read_files_by('series', test_file_path) as series_generator:
+                iisr_io.read_files_by('series', test_file_path) as series_generator:
             for series, test_series in zip(series_generator, test_series_list):
-                self.assertIsInstance(series, io.TimeSeries)
+                self.assertIsInstance(series, iisr_io.TimeSeries)
                 self.assertEqual(series.time_mark, test_series.time_mark)
                 self.assertEqual(series.parameters, test_series.parameters)
                 np.testing.assert_array_equal(series.quadratures, test_series.quadratures)
 
     def test_read_by_blocks(self):
         with make_random_test_file() as (test_file_path, test_series),  \
-                io.read_files_by('blocks', test_file_path) as packages_generator:
+                iisr_io.read_files_by('blocks', test_file_path) as packages_generator:
             package = next(packages_generator)
-            self.assertIsInstance(package, io.TimeSeriesPackage)
+            self.assertIsInstance(package, iisr_io.TimeSeriesPackage)
             for series in package:
-                self.assertIsInstance(series, io.TimeSeries)
+                self.assertIsInstance(series, iisr_io.TimeSeries)
                 self.assertEqual(package.time_mark, series.time_mark)
 
 
@@ -565,7 +565,7 @@ class TestCollectPaths(TestCase):
                 filepath.touch()
                 test_paths.append(filepath)
 
-            paths = io._collect_valid_file_paths(dirpath)
+            paths = iisr_io._collect_valid_file_paths(dirpath)
 
             # Should be sorted
             for test_path, path in zip(test_paths, paths):
@@ -576,42 +576,42 @@ class TestOpenDataFile(TestCase):
     def test_input(self):
         with self.assertRaises(ValueError), tempfile.TemporaryDirectory() as dirname:
             path = Path(dirname) / DUMMY_FILE_NAME
-            with io.open_data_file(path, 'rb'):
+            with iisr_io.open_data_file(path, 'rb'):
                 pass
 
     def test_read(self):
         with tempfile.TemporaryDirectory() as dirname:
             path = Path(dirname) / DUMMY_FILE_NAME
 
-            with self.assertRaises(FileNotFoundError), io.open_data_file(path, 'r'):
+            with self.assertRaises(FileNotFoundError), iisr_io.open_data_file(path, 'r'):
                 pass
 
             path.touch()
 
-            with io.open_data_file(path, 'r') as reader:
-                self.assertIsInstance(reader, io.DataFileReader)
+            with iisr_io.open_data_file(path, 'r') as reader:
+                self.assertIsInstance(reader, iisr_io.DataFileReader)
 
     def test_write(self):
         with tempfile.TemporaryDirectory() as dirname:
             path = Path(dirname) / DUMMY_FILE_NAME
-            with io.open_data_file(path, 'w') as writer:
+            with iisr_io.open_data_file(path, 'w') as writer:
                 self.assertTrue(path.exists())
-                self.assertIsInstance(writer, io.DataFileWriter)
+                self.assertIsInstance(writer, iisr_io.DataFileWriter)
 
     @mock.patch('gzip.decompress')
     @mock.patch('tempfile.TemporaryFile')
     def test_read_compressed(self, mocked_gzip, mocked_tempfile):
         with tempfile.TemporaryDirectory() as dirname:
-            path = Path(dirname) / (DUMMY_FILE_NAME + io.ARCHIVE_EXTENSION)
+            path = Path(dirname) / (DUMMY_FILE_NAME + iisr_io.ARCHIVE_EXTENSION)
 
             with self.assertRaises(FileNotFoundError):
-                with io.open_data_file(path, 'r'):
+                with iisr_io.open_data_file(path, 'r'):
                     pass
 
             path.touch()
 
-            with io.open_data_file(path, 'r') as reader:
-                self.assertIsInstance(reader, io.DataFileReader)
+            with iisr_io.open_data_file(path, 'r') as reader:
+                self.assertIsInstance(reader, iisr_io.DataFileReader)
                 self.assertTrue(mocked_gzip.called)
                 self.assertTrue(mocked_tempfile.called)
 
@@ -620,12 +620,12 @@ class TestOpenDataFile(TestCase):
         mocked_gzip.return_value = ' '
 
         with tempfile.TemporaryDirectory() as dirname:
-            path_with_extension = Path(dirname) / (DUMMY_FILE_NAME + io.ARCHIVE_EXTENSION)
+            path_with_extension = Path(dirname) / (DUMMY_FILE_NAME + iisr_io.ARCHIVE_EXTENSION)
 
             # When called without archive extension
             path = Path(dirname) / DUMMY_FILE_NAME
-            with io.open_data_file(path, 'w', compress_on_write=True) as writer:
-                self.assertIsInstance(writer, io.DataFileWriter)
+            with iisr_io.open_data_file(path, 'w', compress_on_write=True) as writer:
+                self.assertIsInstance(writer, iisr_io.DataFileWriter)
 
             self.assertTrue(mocked_gzip.called)
             self.assertTrue(path_with_extension.exists())
@@ -633,8 +633,8 @@ class TestOpenDataFile(TestCase):
             mocked_gzip.called = False
 
             # When called with archive extension
-            with io.open_data_file(path_with_extension, 'w', compress_on_write=True) as writer:
-                self.assertIsInstance(writer, io.DataFileWriter)
+            with iisr_io.open_data_file(path_with_extension, 'w', compress_on_write=True) as writer:
+                self.assertIsInstance(writer, iisr_io.DataFileWriter)
 
             self.assertTrue(mocked_gzip.called)
             self.assertTrue(path_with_extension.exists())

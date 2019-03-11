@@ -8,7 +8,7 @@ from pathlib import Path
 
 from typing import List, Union
 
-from iisr import io
+from iisr import iisr_io
 from iisr.data_manager import DataManager
 from iisr.preprocessing.active import ActiveSupervisor
 from iisr.preprocessing.passive import PassiveSupervisor
@@ -143,7 +143,7 @@ def run_processing(config: LaunchConfig):
     if config.pulse_length is not None:
         filter_parameters['pulse_lengths'] = config.pulse_length
 
-    series_filter = io.SeriesSelector(**filter_parameters)
+    series_filter = iisr_io.SeriesSelector(**filter_parameters)
 
     # Initialize supervisor based on options
     if config.mode == 'incoherent':
@@ -157,7 +157,7 @@ def run_processing(config: LaunchConfig):
         raise ValueError('Unknown mode: {}'.format(config.mode))
 
     # Process series
-    with io.read_files_by('blocks', paths=config.paths, series_selector=series_filter) as generator:
+    with iisr_io.read_files_by('blocks', paths=config.paths, series_selector=series_filter) as generator:
         results = supervisor.process_packages(generator)
 
     # Gather results from handlers and save them

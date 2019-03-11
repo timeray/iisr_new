@@ -9,7 +9,7 @@ from scipy.signal import medfilt
 from scipy.stats import pearsonr
 from typing import List, TextIO, Dict, Sequence, Tuple, Generator, Iterator, Any
 
-from iisr.io import ExperimentParameters, TimeSeriesPackage
+from iisr.iisr_io import ExperimentParameters, TimeSeriesPackage
 from iisr.preprocessing.representation import HandlerResult, Handler, HandlerParameters, \
     Supervisor, timeout_filter, HandlerBatch
 from iisr.representation import Channel, ADJACENT_CHANNELS
