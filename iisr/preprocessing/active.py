@@ -537,16 +537,7 @@ class ActiveHandler(Handler):
 
         # power outliers
         clutter_range_power = self.calc_power(np.abs(quadratures[:, dist_mask]), axis=1)
-
-        # mask &= (clutter_range_power - clutter_range_power[mask].mean()) \
-        #         < clutter_range_power[mask].std() * 3
         mask &= ~outlier_filter(clutter_range_power).mask
-
-        mid_dist_mask = (dist >= 230) & (dist <= stop_distance_km)
-        mid_range_power = self.calc_power(np.abs(quadratures[:, mid_dist_mask]), axis=1)
-
-        # mask &= (mid_range_power - mid_range_power[mask].mean()) < mid_range_power[mask].std() * 3
-        mask &= ~outlier_filter(mid_range_power).mask
 
         # Clutter and power should be calculated using quadratures with high correlation
         if self.active_parameters.frequency['MHz'] > 159:
@@ -594,7 +585,7 @@ class ActiveHandler(Handler):
         overall_drop = additional_mask.sum() / mask.size * 100
         dropped_at_first_step = 100 - mask.sum() / mask.size * 100
         dropped_at_second_step = 100 - overall_drop - dropped_at_first_step
-        msg = 'processing stats: {}, {}, dropped quadratures: {:.2f}% ' \
+        msg = 'processing stats: {}, {}, remained quadratures: {:.2f}% ' \
               '(first step: {:.2f}%, second step: {:.2f}%)'.format(
             self.active_parameters.frequency, self.active_parameters.pulse_length,
             overall_drop, dropped_at_first_step, dropped_at_second_step
@@ -678,7 +669,7 @@ class ActiveHandler(Handler):
 class LongPulseActiveHandler(ActiveHandler):
     """Class for processing of narrowband series (default channels_set 0, 2)"""
     clutter_start_index = 40
-    clutter_stop_height = 250
+    clutter_stop_height = 300
 
     def __init__(self, active_parameters: ActiveParameters,
                  filter_half_band=25000, n_fft=None, h_step=None, clutter_estimate_window=1,
