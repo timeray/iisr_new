@@ -591,6 +591,7 @@ class ActiveHandler(Handler):
                 clutter_estimate = np.lib.stride_tricks.as_strided(
                     quads_work, shape=strided_shape, strides=new_strides
                 ).mean(axis=1)
+                clutter = clutter_estimate[0]
                 # Subtract clutter, starting from clutter_estimate_window
                 quads_work = quads_work[clutter_window:] - clutter_estimate
 
