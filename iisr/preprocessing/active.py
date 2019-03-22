@@ -543,10 +543,12 @@ class ActiveHandler(Handler):
         corr_mod = np.abs(best_corr)
 
         outlier_filter = MedianAdAroundMedianFilter(n_sigma=4.5)
+        n_filtered = []
 
         # Mask quadratures with outlier correlation
         mask = ~outlier_filter(corr_mod).mask
         quads_work = quads_work[mask]
+        n_filtered.append(mask.size - mask.sum())
 
         # Apply iterative filtered scheme:
         # 1) Find outliers at clutter ranges with median filter
@@ -563,10 +565,12 @@ class ActiveHandler(Handler):
         if dropped_quads > 20:
             logging.WARN('Number of dropped quadratures during clutter estimation will exceed 20%')
         n_samples = quads_work.shape[1]
+        tmp_quads = quads_work
         for _ in range(self.n_clutter_subtract_iter):
-            clutter_range_power = self.calc_power(np.abs(quads_work[:, dist_mask]), axis=1)
+            clutter_range_power = self.calc_power(np.abs(tmp_quads[:, dist_mask]), axis=1)
             mask = ~outlier_filter(clutter_range_power).mask
             quads_work = quads_work[mask]
+            n_filtered.append(mask.size - mask.sum())
             n_times = quads_work.shape[0]
 
             # Method: Subtract n-previous averaged series
@@ -581,7 +585,7 @@ class ActiveHandler(Handler):
                 # Clip excessive values of amplitude drift that appear
                 # when there is noise in some series
                 np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
-                quads_work = quads_work - clutter
+                tmp_quads = quads_work - clutter
             else:
                 strided_shape = (max(n_times - clutter_window, 0), clutter_window, n_samples)
                 strides = quads_work.strides
@@ -593,19 +597,22 @@ class ActiveHandler(Handler):
                 ).mean(axis=1)
                 clutter = np.array(clutter_estimate[0], dtype=complex)
                 # Subtract clutter, starting from clutter_estimate_window
-                quads_work = quads_work[clutter_window:] - clutter_estimate
+                tmp_quads = quads_work[clutter_window:] - clutter_estimate
+                quads_work = quads_work[clutter_window:]
 
         # Logging messages
-        overall_drop = (quadratures.shape[0] - quads_work.shape[0]) / quadratures.shape[0] * 100
-        msg = 'processing stats: {}, {}, remained quadratures: {:.2f}%'.format(
+        orig_n_times = quadratures.shape[0]
+        overall_drop = sum(n_filtered) / orig_n_times * 100
+        msg = 'processing stats: {}, {}, dropped quadratures: {:.2f}% [{}]%'.format(
             self.active_parameters.frequency, self.active_parameters.pulse_length, overall_drop,
+            ' + '.join(['{:.2f}'.format(x * 100 / orig_n_times) for x in n_filtered])
         )
         if best_idx != 0:
             msg += ', pick {} quadrature as reference'.format(test_idx)
         logging.info(msg)
 
         # N-previous averaged series add 1 / n additional incoherent power
-        power = self.calc_power(quads_work) / (1 + 1 / clutter_window)
+        power = self.calc_power(tmp_quads) / (1 + 1 / clutter_window)
         return clutter, power
 
     def handle(self, batch: ActiveBatch):
