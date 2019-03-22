@@ -483,6 +483,7 @@ class ActiveHandler(Handler):
 
         self.n_fft = n_fft
         self.h_step = h_step
+        self.n_clutter_subtract_iter = 3
         self.clutter_estimate_window = clutter_estimate_window
 
         self.eval_power = eval_power
@@ -528,74 +529,82 @@ class ActiveHandler(Handler):
                 best_corr = corr
                 best_phase_std = corr_phase_std
 
+        # copy quadratures for debugging, can be remove later
+        quads_work = quadratures.copy()
+
+        if self.active_parameters.frequency['MHz'] > 159:
+            # Clutter at frequencies > 159 is stronger and its phase is more expressed.
+            # In this case we are able to align phases of all series
+            quads_work *= np.exp(1j * corr_phase[:, None])
+        else:
+            # Otherwise, phase is much noisier and alignment may degrade results
+            pass
+
         corr_mod = np.abs(best_corr)
 
         outlier_filter = MedianAdAroundMedianFilter(n_sigma=4.5)
 
+        # Mask quadratures with outlier correlation
         mask = ~outlier_filter(corr_mod).mask
-        # mask = np.abs(corr_mod - corr_mod.mean()) < corr_mod.std() * 3  # correlation outliers
+        quads_work = quads_work[mask]
 
-        # power outliers
-        clutter_range_power = self.calc_power(np.abs(quadratures[:, dist_mask]), axis=1)
-        mask &= ~outlier_filter(clutter_range_power).mask
+        # Apply iterative filtered scheme:
+        # 1) Find outliers at clutter ranges with median filter
+        # 2) Mask outliers and estimate clutter at each height
+        # 3) Repeat
+        clutter = None
 
-        # Clutter and power should be calculated using quadratures with high correlation
-        if self.active_parameters.frequency['MHz'] > 159:
-            # Clutter at frequencies > 159 is stronger and its phase is more expressed.
-            # In this case we are able to align phases of all series
-            aligned_quadratures = quadratures[mask] * np.exp(1j * corr_phase[mask, None])
+        if self.clutter_estimate_window is None:
+            clutter_window = quadratures.shape[0]
         else:
-            # Otherwise, phase is much noisier and alignment may degrade results
-            aligned_quadratures = quadratures[mask]
+            clutter_window = self.clutter_estimate_window
 
-        clutter = aligned_quadratures.mean(axis=0)
+        dropped_quads = clutter_window * self.n_clutter_subtract_iter / quads_work.shape[0] * 100
+        if dropped_quads > 20:
+            logging.WARN('Number of dropped quadratures during clutter estimation will exceed 20%')
+        n_samples = quads_work.shape[1]
+        for _ in range(self.n_clutter_subtract_iter):
+            clutter_range_power = self.calc_power(np.abs(quads_work[:, dist_mask]), axis=1)
+            mask = ~outlier_filter(clutter_range_power).mask
+            quads_work = quads_work[mask]
+            n_times = quads_work.shape[0]
 
-        clutter_norm = (np.abs(clutter[dist_mask]) ** 2).sum()
-        amplitude_drift = (aligned_quadratures[:, dist_mask]
-                           * clutter[dist_mask].conj()).sum(axis=1) \
-                          / clutter_norm
-        amplitude_drift = amplitude_drift.real  # assume phase is already correct
-        # Clip excessive values of amplitude drift that appear when there is noise in some series
-        np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
+            # Method: Subtract n-previous averaged series
+            if self.clutter_estimate_window is None:
+                clutter = quads_work.mean(axis=0)
 
-        # Method: Subtract n-previous averaged series
-        clutter_window = self.clutter_estimate_window
-        n_times, n_samples = aligned_quadratures.shape
-        if clutter_window is None:
-            clutter_window = n_times  # later we will scale power based on this number
+                clutter_norm = (np.abs(clutter[dist_mask]) ** 2).sum()
+                amplitude_drift = (quads_work[:, dist_mask]
+                                   * clutter[dist_mask].conj()).sum(axis=1) \
+                                  / clutter_norm
+                amplitude_drift = amplitude_drift.real  # assume phase is already correct
+                # Clip excessive values of amplitude drift that appear
+                # when there is noise in some series
+                np.clip(amplitude_drift, a_min=0.75, a_max=1.25, out=amplitude_drift)
+                quads_work = quads_work - clutter
+            else:
+                strided_shape = (max(n_times - clutter_window, 0), clutter_window, n_samples)
+                strides = quads_work.strides
+                new_strides = (strides[0], strides[0], strides[1])
 
-        if clutter_window == n_times:
-            new_quadratures = aligned_quadratures - clutter
-        else:
-            strided_shape = (max(n_times - clutter_window, 0), clutter_window, n_samples)
-            strides = aligned_quadratures.strides
-            new_strides = (strides[0], strides[0], strides[1])
-
-            # Average n series, for each time bin. This gives (n_times - window) new time bins
-            clutter_estimate = np.lib.stride_tricks.as_strided(
-                aligned_quadratures, shape=strided_shape, strides=new_strides
-            ).mean(axis=1)
-            # Subtract clutter, starting from clutter_estimate_window
-            new_quadratures = aligned_quadratures[clutter_window:] - clutter_estimate
-
-        clutter_range_power = self.calc_power(np.abs(new_quadratures[:, dist_mask]), axis=1)
-        additional_mask = ~outlier_filter(clutter_range_power).mask
+                # Average n series, for each time bin. This gives (n_times - window) new time bins
+                clutter_estimate = np.lib.stride_tricks.as_strided(
+                    quads_work, shape=strided_shape, strides=new_strides
+                ).mean(axis=1)
+                # Subtract clutter, starting from clutter_estimate_window
+                quads_work = quads_work[clutter_window:] - clutter_estimate
 
         # Logging messages
-        overall_drop = additional_mask.sum() / mask.size * 100
-        dropped_at_first_step = 100 - mask.sum() / mask.size * 100
-        dropped_at_second_step = 100 - overall_drop - dropped_at_first_step
-        msg = 'processing stats: {}, {}, remained quadratures: {:.2f}% ' \
-              '(first step: {:.2f}%, second step: {:.2f}%)'.format(
-            self.active_parameters.frequency, self.active_parameters.pulse_length,
-            overall_drop, dropped_at_first_step, dropped_at_second_step
+        overall_drop = (quadratures.shape[0] - quads_work.shape[0]) / quadratures.shape[0] * 100
+        msg = 'processing stats: {}, {}, remained quadratures: {:.2f}%'.format(
+            self.active_parameters.frequency, self.active_parameters.pulse_length, overall_drop,
         )
         if best_idx != 0:
             msg += ', pick {} quadrature as reference'.format(test_idx)
         logging.info(msg)
 
         # N-previous averaged series add 1 / n additional incoherent power
-        power = self.calc_power(new_quadratures[additional_mask]) / (1 + 1 / clutter_window)
+        power = self.calc_power(quads_work) / (1 + 1 / clutter_window)
         return clutter, power
 
     def handle(self, batch: ActiveBatch):
