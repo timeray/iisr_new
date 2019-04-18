@@ -55,23 +55,28 @@ def _parse_boolean(string: str) -> bool:
 
 
 @option_parser_decorator
+def _parse_list(input_list: str) -> List[str]:
+    return [element.strip() for element in input_list.split(SEPARATOR)]
+
+
+@option_parser_decorator
 def _parse_path(paths: str) -> List[Path]:
-    return [Path(path.strip()) for path in paths.split(SEPARATOR)]
+    return [Path(path) for path in _parse_list(paths)]
 
 
 @option_parser_decorator
 def _parse_channels(channels: str) -> List[Channel]:
-    return [Channel(int(ch.strip())) for ch in channels.split(SEPARATOR)]
+    return [Channel(int(ch)) for ch in _parse_list(channels)]
 
 
 @option_parser_decorator
 def _parse_frequency(frequencies: str) -> List[Frequency]:
-    return [Frequency(float(freq.strip()), 'MHz') for freq in frequencies.split(SEPARATOR)]
+    return [Frequency(float(freq), 'MHz') for freq in _parse_list(frequencies)]
 
 
 @option_parser_decorator
 def _parse_time_units(time_units_values_us: str) -> List[TimeUnit]:
-    return [TimeUnit(float(val.strip()), 'us') for val in time_units_values_us.split(SEPARATOR)]
+    return [TimeUnit(float(val), 'us') for val in _parse_list(time_units_values_us)]
 
 
 def main(argv=None):
@@ -98,6 +103,7 @@ def main(argv=None):
     # Create LaunchConfig instance and pass it to processing
     launch_config = LaunchConfig(
         paths=_parse_path(config['Common']['paths']),
+        output_formats=_parse_list(config['Common']['output_formats']),
         output_dir_prefix=config['Common']['output_folder_suffix'],
         n_accumulation=int(config['Common']['n_accumulation']),
         mode=config['Common']['mode'],
@@ -106,6 +112,7 @@ def main(argv=None):
         pulse_length=_parse_time_units(config['Common']['pulse_length']),
         accumulation_timeout=int(config['Common']['accumulation_timeout']),
         n_fft=int(config['Common']['n_fft']),
+        n_spectra=int(config['Common']['n_spectra']),
         clutter_estimate_window=_parse_optional_int(config['Common']['clutter_estimate_window']),
         clutter_drift_compensation=_parse_boolean(
             config['Common']['clutter_amplitude_drift_compensation']

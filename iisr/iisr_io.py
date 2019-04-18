@@ -31,7 +31,7 @@ from iisr import units
 from iisr.units import Frequency, TimeUnit
 
 __all__ = ['DataFileReader', 'DataFileWriter', 'open_data_file', 'read_files_by',
-           'TimeSeriesPackage']
+           'TimeSeriesPackage', 'ExperimentParameters']
 ARCHIVE_EXTENSION = '.gz'
 FILE_EXTENSIONS = ('.ISE', '.ISE.GZ', '.IST', '.IST.GZ')
 DELAY_FORMULA_CONSTANT = -960 - 50
@@ -775,7 +775,7 @@ class DataFileReader(DataFileIO):
                 continue
 
             if not self.only_headers:
-                quadratures = self.read_quadratures(data_length)
+                quadratures = self._read_quadratures(data_length)
             else:
                 self.stream.seek(data_length, 1)  # from current position
                 quadratures = None
@@ -810,7 +810,7 @@ class DataFileReader(DataFileIO):
                             ' at the position {} of the input stream'
                             ''.format(KEYWORD.decode(), piece, self.stream.tell() - 9))
 
-    def read_quadratures(self, data_byte_length):
+    def _read_quadratures(self, data_byte_length):
         """
         Read quadratures from file_stream given address and length.
 
@@ -959,8 +959,8 @@ class DataFileWriter(DataFileIO):
 
 @contextlib.contextmanager
 def open_data_file(path: Path, mode: str = 'r', compress_on_write: bool = False,
-                   only_headers: bool = False, series_selector: SeriesSelector = None
-                   ) -> DataFileIO:
+                   only_headers: bool = False, series_selector: SeriesSelector = None,
+                   fix_time_lag_bug=True) -> DataFileIO:
     """Open IISR datafile. Creates a temporal file for compress operations.
 
     Args:
@@ -998,11 +998,13 @@ def open_data_file(path: Path, mode: str = 'r', compress_on_write: bool = False,
             with open(str(path), 'rb') as zipped_file:
                 file.write(gzip.decompress(zipped_file.read()))
             file.seek(0)
-            yield DataFileReader(file, file_info, series_selector, only_headers)
+            yield DataFileReader(file, file_info, series_selector, only_headers,
+                                 fix_time_lag_bug=fix_time_lag_bug)
 
     elif reading:
         with open(str(path), 'rb') as file:  # type: IO
-            yield DataFileReader(file, file_info, series_selector, only_headers)
+            yield DataFileReader(file, file_info, series_selector, only_headers,
+                                 fix_time_lag_bug=fix_time_lag_bug)
 
     elif compressed and writing:
         with open(str(path), 'wb') as file:

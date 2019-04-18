@@ -7,6 +7,9 @@ import os
 import sys
 from pathlib import Path
 import configparser
+
+from pyasp.stdparse import StdFile
+
 from iisr.utils import DATE_FMT
 from iisr import IISR_PATH
 
@@ -41,6 +44,19 @@ class DataManager:
             self.main_folder.mkdir()
         elif not self.main_folder.is_dir():
             raise NotADirectoryError('{}'.format(self.main_folder))
+
+    def save_stdfile(self, stdfile: StdFile, filename: str, save_dir_suffix=''):
+        self._check_main_folder()
+
+        save_dirname = 'std'
+        if save_dir_suffix:
+            save_dirname = save_dirname + '_' + save_dir_suffix
+
+        dirpath = self.main_folder / save_dirname
+        if not dirpath.exists():
+            dirpath.mkdir(parents=True)
+
+        stdfile.to_file(dirpath / filename)
 
     def save_preprocessing_result(self, result, save_dir_suffix=''):
         """

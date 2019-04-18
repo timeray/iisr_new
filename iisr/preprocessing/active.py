@@ -5,8 +5,6 @@ from datetime import datetime, date, timedelta
 
 import numpy as np
 from scipy import signal
-from scipy.signal import medfilt
-from scipy.stats import pearsonr
 from typing import List, TextIO, Dict, Sequence, Tuple, Generator, Iterator, Any
 
 from iisr.iisr_io import ExperimentParameters, TimeSeriesPackage
@@ -14,8 +12,9 @@ from iisr.preprocessing.representation import HandlerResult, Handler, HandlerPar
     Supervisor, timeout_filter, HandlerBatch
 from iisr.representation import Channel, ADJACENT_CHANNELS
 from iisr.units import Frequency, TimeUnit, Distance
-from iisr.utils import TIME_FMT, DATE_FMT, central_time
+from iisr.utils import TIME_FMT, DATE_FMT, central_time, normalize2unity
 from iisr.filtering import MedianAdAroundMedianFilter
+from pyasp.stdparse import StdFile, AnnotatedData, Header, StdMode
 
 __all__ = ['calc_delays', 'delays2distance', 'ActiveParameters', 'ActiveResult',
            'LongPulseActiveHandler', 'ShortPulseActiveHandler',
@@ -175,13 +174,16 @@ class ActiveResult(HandlerResult):
     quantity_headers = {'power': 'Power', 'coherence': 'Coherence', 'clutter': 'Clutter',
                         'power_no_clutter': 'NoClutterPower'}
     mode_name = 'active'
+    stdfiles_offset_st1 = 80
 
     def __init__(self, parameters: ActiveParameters,
                  time_marks: Sequence[datetime],
                  power: Dict[Channel, np.ndarray] = None,
                  coherence: np.ndarray = None,
                  clutter: Dict[Channel, np.ndarray] = None,
-                 power_no_clutter: Dict[Channel, np.ndarray] = None):
+                 power_no_clutter: Dict[Channel, np.ndarray] = None,
+                 spectra: Dict[Channel, np.ndarray] = None,
+                 spectra_offsets: List[TimeUnit] = None):
         """Result of processing of active experiment. It is expected, that power and spectrum are
         calculated for each (frequency, pulse_len, channel) and time marks are aligned.
 
@@ -195,7 +197,7 @@ class ActiveResult(HandlerResult):
             coherence: Coherence between channels. Complex values.
                 Shape [len(time_marks), n_samples].
             clutter: Coherently summed quadratures.
-                Sahpe [len(time_marks, n_samples]
+                Shape [len(time_marks, n_samples]
         """
         if power is not None:
             if tuple(sorted(power.keys())) != parameters.channels:
@@ -224,6 +226,12 @@ class ActiveResult(HandlerResult):
         self.coherence = coherence
         self.clutter = clutter
         self.power_no_clutter = power_no_clutter
+
+        if spectra is not None and spectra_offsets is None:
+            raise ValueError('Expect both, spectra and spectra offsets')
+
+        self.spectra = spectra
+        self.spectra_offsets = spectra_offsets
 
         # Calculate all involved dates
         self.dates = sorted(set((date(dt.year, dt.month, dt.day) for dt in self.time_marks)))
@@ -326,6 +334,80 @@ class ActiveResult(HandlerResult):
             raise ValueError('Not results for given date {}'.format(save_date))
 
         self._write_results(file, save_date=save_date, sep=sep, precision=precision)
+
+    def to_std(self, save_date: date = None,
+               clutter_cutoff_dist: int = 150) -> Dict[Channel, StdFile]:
+        """Save results to asp files"""
+        if save_date is not None:
+            start_date = datetime(save_date.year, save_date.month, save_date.day)
+            end_date = start_date + timedelta(days=1)
+            date_mask = (self.time_marks >= start_date) & (self.time_marks < end_date)
+        else:
+            date_mask = np.ones(len(self.time_marks), dtype=bool)
+
+        channels = self.parameters.channels
+        first_delay = self.parameters.total_delay['us']
+        pulse_length_us = self.parameters.pulse_length['us']
+        time_step_us = int(1 / self.parameters.sampling_frequency['MHz'])
+        dist_mask = np.ones(self.parameters.n_samples, dtype=bool)
+        if self.parameters.pulse_type == 'short':
+            power_mode = StdMode.short_power.value
+            # Cut correlation artifacts
+            code_size = int(pulse_length_us * self.parameters.sampling_frequency['MHz'])
+            if code_size > 0:
+                dist_mask[-code_size // 2:] = False
+        elif self.parameters.pulse_type == 'long':
+            power_mode = StdMode.long_power.value
+        else:
+            raise ValueError('Unexpected pulse type')
+
+        frequency = self.parameters.frequency
+
+        # Prepare annotated power
+        corrected_cutoff_dist = clutter_cutoff_dist + pulse_length_us * 0.15
+        dist_mask &= self.parameters.distance['km'] > corrected_cutoff_dist
+
+        dtimes = self.time_marks[date_mask]
+        power = {ch: self.power_no_clutter[ch][date_mask][:, dist_mask] for ch in channels}
+        annotated_power = {ch: [] for ch in channels}
+        for ch, power_ch in power.items():
+            for dt, pwr in zip(dtimes, power_ch):
+                header = Header(dt.date(), dt, mode=power_mode,
+                                frequency_hz=int(frequency['Hz']),
+                                pulse_length_us=int(pulse_length_us),
+                                first_delay=int(first_delay),
+                                n_samples=pwr.size,
+                                time_step_us=time_step_us)
+
+                # Normalize power
+                pwr = (normalize2unity(pwr) * 255).astype(np.uint8)
+
+                annotated_power[ch].append(AnnotatedData(header, pwr))
+
+        # Save spectra
+        annotated_spectra = {ch: [] for ch in channels}
+        if self.parameters.pulse_type == 'long':
+            spectra_mode = StdMode.spectra.value
+            spectra = {ch: val[date_mask] for ch, val in self.spectra.items()}
+
+            spectra_delays = [offset['us'] for offset in self.spectra_offsets]
+            for ch, spectra_ch in spectra.items():
+                for dt, sp in zip(dtimes, spectra_ch):
+                    header = Header(dt.date(), dt, mode=spectra_mode,
+                                    frequency_hz=int(frequency['Hz']),
+                                    pulse_length_us=int(pulse_length_us),
+                                    first_delay=[int(delay) for delay in spectra_delays],
+                                    n_samples=sp.shape[1],
+                                    time_step_us=time_step_us)
+
+                    sp = (normalize2unity(sp, axis=1) * 255).astype(np.uint8)
+
+                    annotated_spectra[ch].append(AnnotatedData(header, sp))
+
+        stdfiles = {}
+        for ch in channels:
+            stdfiles[ch] = StdFile(annotated_power[ch], annotated_spectra[ch])
+        return stdfiles
 
     @classmethod
     def load_txt(cls, files: List[TextIO], sep: str = ' ') -> 'ActiveResult':
@@ -474,15 +556,12 @@ class ActiveHandler(Handler):
     clutter_start_index = NotImplemented
     clutter_stop_height = NotImplemented
 
-    def __init__(self, active_parameters: ActiveParameters,
-                 n_fft=None, h_step=None, clutter_estimate_window=1,
+    def __init__(self, active_parameters: ActiveParameters, clutter_estimate_window=1,
                  clutter_drift_compensation=False,
                  eval_power=True, eval_coherence=False, eval_clutter=True):
         self.active_parameters = active_parameters
         self.channels = active_parameters.channels
 
-        self.n_fft = n_fft
-        self.h_step = h_step
         self.n_clutter_subtract_iter = 3
         self.clutter_estimate_window = clutter_estimate_window
 
@@ -495,11 +574,12 @@ class ActiveHandler(Handler):
         self.coherence = [] if self.eval_coherence else None
         self.clutter = defaultdict(list) if self.eval_clutter else None
         self.power_no_clutter = defaultdict(list) if self.eval_clutter else None
+        self._quads_no_clutter = {} if self.eval_clutter else None
 
     def preproc_quads(self, quadratures: np.ndarray) -> np.ndarray:
         return quadratures
 
-    def estimate_clutter(self, quadratures: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def estimate_clutter(self, quadratures: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         # Assuming that each subsequent realization differs by some constant complex k:
         # Find k[i], i = 0..N-1, N-1 - number of realizations in the batch
         # (k maximize sum of current and previous realizations)
@@ -613,7 +693,7 @@ class ActiveHandler(Handler):
 
         # N-previous averaged series add 1 / n additional incoherent power
         power = self.calc_power(tmp_quads) / (1 + 1 / clutter_window)
-        return clutter, power
+        return clutter, power, tmp_quads
 
     def handle(self, batch: ActiveBatch):
         time_marks = batch.time_marks
@@ -645,9 +725,10 @@ class ActiveHandler(Handler):
 
         if self.eval_clutter:
             for ch in channels:
-                cl, pwr = self.estimate_clutter(quadratures[ch])
+                cl, pwr, quads_no_clutter = self.estimate_clutter(quadratures[ch])
                 self.clutter[ch].append(cl)
                 self.power_no_clutter[ch].append(pwr)
+                self._quads_no_clutter[ch] = quads_no_clutter
 
     def finish(self) -> ActiveResult:
         """Output results"""
@@ -687,16 +768,60 @@ class LongPulseActiveHandler(ActiveHandler):
     """Class for processing of narrowband series (default channels_set 0, 2)"""
     clutter_start_index = 40
     clutter_stop_height = 300
+    spectra_start_dist = 250
+    spectra_stop_dist = 700
+    spectra_size = 100
 
     def __init__(self, active_parameters: ActiveParameters,
-                 filter_half_band=25000, n_fft=None, h_step=None, clutter_estimate_window=1,
+                 filter_half_band=25000, n_fft=None, n_spectra=None, clutter_estimate_window=1,
                  clutter_drift_compensation=False, eval_power=True, eval_coherence=False,
                  apply_lowpass_filter=False):
-        super().__init__(active_parameters, n_fft, h_step, clutter_estimate_window,
+        super().__init__(active_parameters, clutter_estimate_window,
                          clutter_drift_compensation, eval_power, eval_coherence)
         self._filter = None
         self.filter_half_band = filter_half_band
         self.apply_lowpass_filter = apply_lowpass_filter
+        if n_fft is not None:
+            assert n_spectra is not None
+        self.n_fft = n_fft
+        self.n_spectra = n_spectra
+        self.spectra = defaultdict(list)
+        self._prep_spectra_constants()
+
+    def _prep_spectra_constants(self):
+        n_spectra = self.n_spectra
+        n_samples = self.active_parameters.n_samples
+        dist = self.active_parameters.distance
+        dist_mask = (dist['km'] > self.spectra_start_dist) & (dist['km'] < self.spectra_stop_dist)
+        first_idx, last_idx = np.where(dist_mask)[0][[0, -1]]
+        last_idx = min(last_idx, n_samples - self.n_fft)
+
+        if n_spectra > 1:
+            idx_step = (last_idx - first_idx) / (n_spectra - 1)
+            sp_indexes = [int(first_idx + idx_step * i) for i in range(n_spectra)]
+        else:
+            sp_indexes = [first_idx]
+
+        self.spectra_offset = TimeUnit(self.active_parameters.delays['us'][sp_indexes], 'us')
+
+        # Create spectra slices with length equal to pulse length
+        dt_us = 1 / self.active_parameters.sampling_frequency['MHz']
+        pulse_length_points = int(np.floor(self.active_parameters.pulse_length['us'] / dt_us))
+
+        for i in range(len(sp_indexes)):
+            sp_indexes[i] = list(np.arange(sp_indexes[i], sp_indexes[i] + pulse_length_points))
+        self.sp_indexes = sp_indexes
+
+        # Calculate mask that define out frequences
+        if pulse_length_points >= self.n_fft:
+            self.sp_center_mask = np.ones(pulse_length_points, dtype=bool)
+        else:
+            center = (self.n_fft + 1) // 2
+            left = center - (self.spectra_size - 1) // 2
+            right = center + self.spectra_size // 2 + 1
+
+            self.sp_center_mask = np.zeros(self.n_fft, dtype=bool)
+            self.sp_center_mask[left:right] = True
 
     @property
     def filter(self) -> Dict[str, np.ndarray]:
@@ -716,17 +841,54 @@ class LongPulseActiveHandler(ActiveHandler):
         else:
             return quadratures
 
+    def handle(self, batch: ActiveBatch):
+        super().handle(batch)
+        if self.n_fft is not None:
+            if self.eval_clutter:
+                quadratures = self._quads_no_clutter
+            else:
+                quadratures = batch.quadratures
+
+            for ch, quads_ch in quadratures.items():
+                spectra_power = self.calc_spectra(quads_ch)
+                self.spectra[ch].append(spectra_power)
+
+    def finish(self) -> ActiveResult:
+        results = super().finish()
+
+        if self.n_fft is not None:
+            stacked_spectra = {}
+            for ch in self.active_parameters.channels:
+                stacked_spectra[ch] = np.stack(self.spectra[ch])
+
+            results.spectra = stacked_spectra
+            results.spectra_offsets = self.spectra_offset
+        return results
+
+    def calc_spectra(self, quadratures: np.ndarray):
+        spectra_quads = quadratures[:, self.sp_indexes]
+        fft = np.fft.fft(spectra_quads, n=self.n_fft, axis=-1)
+
+        scale = 1.0 / self.n_fft ** 2
+        np.abs(fft, out=fft)
+        np.square(fft.real, out=fft.real)
+        np.multiply(fft.real, scale, out=fft.real)
+
+        power_spectra = fft.real.mean(axis=0)
+        power_spectra = np.fft.fftshift(power_spectra, axes=-1)
+        power_spectra = power_spectra[:, self.sp_center_mask]
+        return power_spectra
+
 
 class ShortPulseActiveHandler(ActiveHandler):
     """Class for processing of wideband series (default channels_set 1, 3)"""
     clutter_start_index = 100
     clutter_stop_height = 250
 
-    def __init__(self, active_parameters: ActiveParameters,
-                 n_fft=None, h_step=None, clutter_estimate_window=1,
+    def __init__(self, active_parameters: ActiveParameters, clutter_estimate_window=1,
                  clutter_drift_compensation=False,
                  eval_power=True, eval_coherence=False):
-        super().__init__(active_parameters, n_fft, h_step, clutter_estimate_window,
+        super().__init__(active_parameters, clutter_estimate_window,
                          clutter_drift_compensation, eval_power, eval_coherence)
 
         params = self.active_parameters
@@ -752,7 +914,7 @@ class ActiveSupervisor(Supervisor):
     AggYieldType = Tuple[ActiveParameters, ActiveBatch]
 
     def __init__(self, n_accumulation: int, timeout: timedelta,
-                 n_fft: int = None, h_step: float = None, clutter_estimate_window=1,
+                 n_fft: int = None, n_spectra: int = None, clutter_estimate_window=1,
                  clutter_drift_compensation=False,
                  eval_power: bool = True, eval_coherence: bool = False,
                  narrow_filter_half_band=25000):
@@ -765,7 +927,7 @@ class ActiveSupervisor(Supervisor):
         self.n_accumulation = n_accumulation
         self.timeout = timeout
         self.n_fft = n_fft
-        self.h_step = h_step
+        self.n_spectra = n_spectra
         self.narrow_filter_half_band = narrow_filter_half_band
         self.clutter_estimate_window = clutter_estimate_window
         self.clutter_drift_compensation = clutter_drift_compensation
@@ -875,8 +1037,6 @@ class ActiveSupervisor(Supervisor):
         if parameters.pulse_type == 'short':
             return ShortPulseActiveHandler(
                 active_parameters=parameters,
-                n_fft=self.n_fft,
-                h_step=self.h_step,
                 clutter_drift_compensation=self.clutter_drift_compensation,
                 clutter_estimate_window=self.clutter_estimate_window,
                 eval_power=self.eval_power,
@@ -887,7 +1047,7 @@ class ActiveSupervisor(Supervisor):
                 active_parameters=parameters,
                 filter_half_band=self.narrow_filter_half_band,
                 n_fft=self.n_fft,
-                h_step=self.h_step,
+                n_spectra=self.n_spectra,
                 clutter_drift_compensation=self.clutter_drift_compensation,
                 clutter_estimate_window=self.clutter_estimate_window,
                 eval_power=self.eval_power,
