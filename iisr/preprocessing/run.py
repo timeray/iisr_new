@@ -3,11 +3,10 @@ Pre processing stage processing of IISR data.
 """
 import logging
 import time
-from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
 
-from typing import List, Union, Dict, Tuple
+from typing import List, Union, Dict
 
 from iisr import iisr_io
 from iisr.data_manager import DataManager
@@ -146,6 +145,51 @@ class LaunchConfig:
         return '\n'.join(msg)
 
 
+def _merge_and_save_stdfiles(results, manager):
+    assert all(results[0].dates == res.dates for res in results)
+    dates = results[0].dates
+    for date in dates:
+        grouped_files = infinite_defaultdict()
+        for result in results:  # type: ActiveResult
+            stdfiles = result.to_std(date)
+            for ch, stdfile in stdfiles.items():
+                horn = ch.horn
+                pulse_type = ch.pulse_type
+                stdfile = stdfiles[ch]
+                freq = stdfile.power[0].header.frequency_hz / 1e6
+                pulse_len = stdfile.power[0].header.pulse_length_us
+
+                if pulse_type == 'short':
+                    if pulse_len == 0:
+                        # Noise channel, ignore
+                        continue
+
+                    # Shift grouping frequency to long channel equivalent
+                    freq -= 0.3
+
+                grouped_files[horn, freq][pulse_type][pulse_len] = stdfile
+
+        for (horn, freq), files in grouped_files.items():
+            files: Dict[str, Dict[int, StdFile]]
+            if len(files) != 2:
+                raise ValueError('Expect short and long pulses to be present in files')
+
+            if len(files['short']) != 1:
+                raise ValueError('Expect single short pulse')
+
+            short_stdfile = list(files['short'].values())[0]
+
+            if len(files['long']) > 2:
+                raise ValueError('Expect at most 2 long pulses (700 and 900)')
+
+            for pulse_len, long_stdfile in files['long'].items():
+                stdfile = _merge_stdfiles(short_stdfile, long_stdfile)
+
+                filename = '{}_{}_f{:.2f}_len{}.std' \
+                           ''.format(date.strftime('%Y%m%d'), horn, freq, int(pulse_len))
+                manager.save_stdfile(stdfile, filename)
+
+
 def run_processing(config: LaunchConfig):
     """
     Launch processing given configuration.
@@ -188,7 +232,8 @@ def run_processing(config: LaunchConfig):
         raise ValueError('Unknown mode: {}'.format(config.mode))
 
     # Process series
-    with iisr_io.read_files_by('blocks', paths=config.paths, series_selector=series_filter) as generator:
+    with iisr_io.read_files_by('blocks', paths=config.paths,
+                               series_selector=series_filter) as generator:
         results = supervisor.process_packages(generator)
 
     # Gather results from handlers and save them
@@ -198,50 +243,8 @@ def run_processing(config: LaunchConfig):
             for result in results:
                 manager.save_preprocessing_result(result, save_dir_suffix=config.output_dir_suffix)
         elif out_fmt == 'std':
-            assert all(results[0].dates == res.dates for res in results)
-            dates = results[0].dates
-            for date in dates:
-                grouped_files = infinite_defaultdict()
-                for result in results:  # type: ActiveResult
-                    stdfiles = result.to_std(date)
-                    for ch, stdfile in stdfiles.items():
-                        horn = ch.horn
-                        pulse_type = ch.pulse_type
-                        stdfile = stdfiles[ch]
-                        freq = stdfile.power[0].header.frequency_hz / 1e6
-                        pulse_len = stdfile.power[0].header.pulse_length_us
-
-                        if pulse_type == 'short':
-                            if pulse_len == 0:
-                                # Noise channel, ignore
-                                continue
-
-                            # Shift grouping frequency to long channel equivalent
-                            freq -= 0.3
-
-                        grouped_files[horn, freq][pulse_type][pulse_len] = stdfile
-
-                for (horn, freq), files in grouped_files.items():
-                    files: Dict[str, Dict[int, StdFile]]
-                    if len(files) != 2:
-                        raise ValueError('Expect short and long pulses to be present in files')
-
-                    if len(files['short']) != 1:
-                        raise ValueError('Expect single short pulse')
-
-                    short_stdfile = list(files['short'].values())[0]
-
-                    if len(files['long']) > 2:
-                        raise ValueError('Expect at most 2 long pulses (700 and 900)')
-
-                    for pulse_len, long_stdfile in files['long'].items():
-                        stdfile = _merge_stdfiles(short_stdfile, long_stdfile)
-
-                        filename = '{}_{}_f{:.2f}_len{}.std' \
-                                   ''.format(date.strftime('%Y%m%d'), horn, freq, int(pulse_len))
-                        manager.save_stdfile(stdfile, filename)
-
+            _merge_and_save_stdfiles(results, manager)
         else:
-            logging.warn('Unexpected format from config: {}'.format(out_fmt))
+            logging.warning('Unexpected format from config: {}'.format(out_fmt))
 
     logging.info('Processing successful. Elapsed time: {:.0f} s'.format(time.time() - start_time))

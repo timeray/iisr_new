@@ -17,8 +17,12 @@ from iisr.filtering import MedianAdAroundMedianFilter
 from pyasp.stdparse import StdFile, AnnotatedData, Header, StdMode
 
 __all__ = ['calc_delays', 'delays2distance', 'ActiveParameters', 'ActiveResult',
-           'LongPulseActiveHandler', 'ShortPulseActiveHandler',
+           'ActiveSupervisor', 'LongPulseActiveHandler', 'ShortPulseActiveHandler',
            'EvalCoherenceError', 'ReadingError', 'square_barker']
+
+STDFILE_MAX_POWER = 2 ** 16
+DATA_MAX_POWER = 2 ** 12  # estimate from realizations
+DATA_MAX_SPECTRA_POWER = 1
 
 
 class ReadingError(Exception):
@@ -203,10 +207,11 @@ class ActiveResult(HandlerResult):
                 Shape [len(time_marks, n_samples]
         """
         if power is not None:
-            assert sorted(power.keys()) == sorted(n_acc_power.keys())
+            if n_acc_power is not None:
+                assert sorted(power.keys()) == sorted(n_acc_power.keys())
 
-            for ch in power:
-                assert len(power[ch]) == len(n_acc_power[ch])
+                for ch in power:
+                    assert len(power[ch]) == len(n_acc_power[ch])
 
             if tuple(sorted(power.keys())) != parameters.channels:
                 raise AssertionError('Channels in power dictionary must be identical '
@@ -224,10 +229,11 @@ class ActiveResult(HandlerResult):
                 raise ValueError('Expect coherence to be complex valued')
 
         if clutter is not None:
-            assert sorted(power_no_clutter.keys()) == sorted(n_acc_power_no_clutter.keys())
+            if n_acc_power_no_clutter is not None:
+                assert sorted(power_no_clutter.keys()) == sorted(n_acc_power_no_clutter.keys())
 
-            for ch in power_no_clutter:
-                assert len(power_no_clutter[ch]) == len(n_acc_power_no_clutter[ch])
+                for ch in power_no_clutter:
+                    assert len(power_no_clutter[ch]) == len(n_acc_power_no_clutter[ch])
 
             for cl in clutter.values():
                 if len(time_marks) != len(cl):
@@ -396,15 +402,23 @@ class ActiveResult(HandlerResult):
             power_ch = power[ch]
             n_acc_power_ch = n_acc_power[ch]
             for dt, pwr, n_acc in zip(dtimes, power_ch, n_acc_power_ch):
+                # Map power to [0..65535]. This range represents averaged power after
+                # old ADC/summation system.
+                pwr = (pwr * STDFILE_MAX_POWER / DATA_MAX_POWER).astype(np.uint16)
+                power_min = pwr.min()
+                power_max = pwr.max()
+
                 header = Header(dt.date(), dt, mode=power_mode,
                                 frequency_hz=int(frequency['Hz']),
                                 pulse_length_us=int(pulse_length_us),
                                 first_delay=int(first_delay),
                                 n_samples=pwr.size,
                                 time_step_us=time_step_us,
+                                power_min=power_min,
+                                power_max=power_max,
                                 n_accumulated=n_acc)
 
-                # Normalize power
+                # Normalize power to 1byte .std format unsigned int power
                 pwr = (normalize2unity(pwr) * 255).astype(np.uint8)
 
                 annotated_power[ch].append(AnnotatedData(header, pwr))
@@ -421,12 +435,18 @@ class ActiveResult(HandlerResult):
                 spectra_ch = spectra[ch]
                 n_acc_spectra_ch = n_acc_spectra[ch]
                 for dt, sp, n_acc in zip(dtimes, spectra_ch, n_acc_spectra_ch):
+                    sp = (sp * STDFILE_MAX_POWER / DATA_MAX_SPECTRA_POWER).astype(np.uint16)
+                    power_min = sp.min()
+                    power_max = sp.max()
+
                     header = Header(dt.date(), dt, mode=spectra_mode,
                                     frequency_hz=int(frequency['Hz']),
                                     pulse_length_us=int(pulse_length_us),
                                     first_delay=[int(delay) for delay in spectra_delays],
                                     n_samples=sp.shape[1],
                                     time_step_us=time_step_us,
+                                    power_min=power_min,
+                                    power_max=power_max,
                                     n_accumulated=n_acc)
 
                     sp = (normalize2unity(sp, axis=1) * 255).astype(np.uint8)
@@ -996,8 +1016,11 @@ class ShortPulseActiveHandler(ActiveHandler):
         if self.is_noise:
             return quadratures
         else:
+            # Convolve
+            # and divide by len of the code
+            # (such that order of wideband signal power will be like same as for narrowband signal)
             return np.apply_along_axis(signal.correlate, axis=axis, arr=quadratures,
-                                       in2=self.code, mode='same')
+                                       in2=self.code, mode='same') / np.sqrt(len(self.code))
 
 
 class ActiveSupervisor(Supervisor):
