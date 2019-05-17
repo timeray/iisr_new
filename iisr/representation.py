@@ -1,6 +1,7 @@
 """
 Collect classes for IISR data representation.
 """
+from typing import Sequence
 
 __all__ = ['CHANNELS_INFO', 'Channel', 'ReprJSONDecoder', 'ReprJSONEncoder']
 
@@ -10,7 +11,9 @@ CHANNELS_INFO = {
     0: {'type': 'long', 'horn': 'upper', 'band_type': 'narrow'},
     1: {'type': 'short', 'horn': 'upper', 'band_type': 'wide'},
     2: {'type': 'long', 'horn': 'lower', 'band_type': 'narrow'},
-    3: {'type': 'short', 'horn': 'lower', 'band_type': 'wide'}
+    3: {'type': 'short', 'horn': 'lower', 'band_type': 'wide'},
+    20: {'type': 'long', 'horn': 'both', 'band_type': 'narrow'},
+    31: {'type': 'short', 'horn': 'both', 'band_type': 'wide'},
 }
 
 
@@ -18,7 +21,7 @@ class Channel:
     __slots__ = ['value', 'pulse_type', 'horn', 'band_type']
 
     def __init__(self, value):
-        _valid_channels = [0, 1, 2, 3]
+        _valid_channels = [0, 1, 2, 3, 20, 31]  # 20 and 31 are sum channels
         if value not in _valid_channels:
             raise ValueError('Channel can be one of {}'.format(_valid_channels))
         self.value = value
@@ -51,6 +54,18 @@ class Channel:
 
     def __gt__(self, other: 'Channel'):
         return self.value.__gt__(other.value)
+
+
+def get_sum_channel(channels: Sequence[Channel]):
+    assert len(channels) > 0
+    pulse_type = channels[0].pulse_type
+    assert all(ch.pulse_type == pulse_type for ch in channels)
+    if pulse_type == 'long':
+        return Channel(20)
+    elif pulse_type == 'short':
+        return Channel(31)
+    else:
+        raise ValueError('Unexpected pulse type: {}'.format(pulse_type))
 
 
 ADJACENT_CHANNELS = {Channel(0): Channel(2), Channel(1): Channel(3),

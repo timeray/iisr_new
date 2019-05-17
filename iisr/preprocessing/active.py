@@ -10,7 +10,7 @@ from typing import List, TextIO, Dict, Sequence, Tuple, Generator, Iterator, Any
 from iisr.iisr_io import ExperimentParameters, TimeSeriesPackage
 from iisr.preprocessing.representation import HandlerResult, Handler, HandlerParameters, \
     Supervisor, timeout_filter, HandlerBatch
-from iisr.representation import Channel, ADJACENT_CHANNELS
+from iisr.representation import Channel, ADJACENT_CHANNELS, get_sum_channel
 from iisr.units import Frequency, TimeUnit, Distance
 from iisr.utils import TIME_FMT, DATE_FMT, central_time, normalize2unity
 from iisr.filtering import MedianAdAroundMedianFilter
@@ -179,10 +179,13 @@ class ActiveResult(HandlerResult):
     def __init__(self, parameters: ActiveParameters,
                  time_marks: Sequence[datetime],
                  power: Dict[Channel, np.ndarray] = None,
+                 n_acc_power: Dict[Channel, np.ndarray] = None,
                  coherence: np.ndarray = None,
                  clutter: Dict[Channel, np.ndarray] = None,
                  power_no_clutter: Dict[Channel, np.ndarray] = None,
+                 n_acc_power_no_clutter: Dict[Channel, np.ndarray] = None,
                  spectra: Dict[Channel, np.ndarray] = None,
+                 n_acc_spectra: Dict[Channel, np.ndarray] = None,
                  spectra_offsets: List[TimeUnit] = None):
         """Result of processing of active experiment. It is expected, that power and spectrum are
         calculated for each (frequency, pulse_len, channel) and time marks are aligned.
@@ -200,6 +203,11 @@ class ActiveResult(HandlerResult):
                 Shape [len(time_marks, n_samples]
         """
         if power is not None:
+            assert sorted(power.keys()) == sorted(n_acc_power.keys())
+
+            for ch in power:
+                assert len(power[ch]) == len(n_acc_power[ch])
+
             if tuple(sorted(power.keys())) != parameters.channels:
                 raise AssertionError('Channels in power dictionary must be identical '
                                      'to channels in parameters object')
@@ -216,6 +224,11 @@ class ActiveResult(HandlerResult):
                 raise ValueError('Expect coherence to be complex valued')
 
         if clutter is not None:
+            assert sorted(power_no_clutter.keys()) == sorted(n_acc_power_no_clutter.keys())
+
+            for ch in power_no_clutter:
+                assert len(power_no_clutter[ch]) == len(n_acc_power_no_clutter[ch])
+
             for cl in clutter.values():
                 if len(time_marks) != len(cl):
                     raise ValueError('Length of time_marks and all clutter arrays must be equal')
@@ -223,14 +236,22 @@ class ActiveResult(HandlerResult):
         self.parameters = parameters
         self.time_marks = np.array(time_marks, dtype=datetime)
         self.power = power
+        self.n_acc_power = n_acc_power
         self.coherence = coherence
         self.clutter = clutter
         self.power_no_clutter = power_no_clutter
+        self.n_acc_power_no_clutter = n_acc_power_no_clutter
 
-        if spectra is not None and spectra_offsets is None:
-            raise ValueError('Expect both, spectra and spectra offsets')
+        if spectra is not None:
+            if spectra_offsets is None:
+                raise ValueError('Expect both, spectra and spectra offsets')
+
+            assert sorted(spectra.keys()) == sorted(n_acc_spectra.keys())
+            for ch in spectra:
+                assert len(spectra[ch]) == len(n_acc_spectra[ch])
 
         self.spectra = spectra
+        self.n_acc_spectra = n_acc_spectra
         self.spectra_offsets = spectra_offsets
 
         # Calculate all involved dates
@@ -369,15 +390,19 @@ class ActiveResult(HandlerResult):
 
         dtimes = self.time_marks[date_mask]
         power = {ch: self.power_no_clutter[ch][date_mask][:, dist_mask] for ch in channels}
+        n_acc_power = {ch: self.n_acc_power_no_clutter[ch][date_mask] for ch in channels}
         annotated_power = {ch: [] for ch in channels}
-        for ch, power_ch in power.items():
-            for dt, pwr in zip(dtimes, power_ch):
+        for ch in power:
+            power_ch = power[ch]
+            n_acc_power_ch = n_acc_power[ch]
+            for dt, pwr, n_acc in zip(dtimes, power_ch, n_acc_power_ch):
                 header = Header(dt.date(), dt, mode=power_mode,
                                 frequency_hz=int(frequency['Hz']),
                                 pulse_length_us=int(pulse_length_us),
                                 first_delay=int(first_delay),
                                 n_samples=pwr.size,
-                                time_step_us=time_step_us)
+                                time_step_us=time_step_us,
+                                n_accumulated=n_acc)
 
                 # Normalize power
                 pwr = (normalize2unity(pwr) * 255).astype(np.uint8)
@@ -389,16 +414,20 @@ class ActiveResult(HandlerResult):
         if self.parameters.pulse_type == 'long':
             spectra_mode = StdMode.spectra.value
             spectra = {ch: val[date_mask] for ch, val in self.spectra.items()}
+            n_acc_spectra = {ch: val[date_mask] for ch, val in self.n_acc_spectra.items()}
 
             spectra_delays = [offset['us'] for offset in self.spectra_offsets]
-            for ch, spectra_ch in spectra.items():
-                for dt, sp in zip(dtimes, spectra_ch):
+            for ch in spectra:
+                spectra_ch = spectra[ch]
+                n_acc_spectra_ch = n_acc_spectra[ch]
+                for dt, sp, n_acc in zip(dtimes, spectra_ch, n_acc_spectra_ch):
                     header = Header(dt.date(), dt, mode=spectra_mode,
                                     frequency_hz=int(frequency['Hz']),
                                     pulse_length_us=int(pulse_length_us),
                                     first_delay=[int(delay) for delay in spectra_delays],
                                     n_samples=sp.shape[1],
-                                    time_step_us=time_step_us)
+                                    time_step_us=time_step_us,
+                                    n_accumulated=n_acc)
 
                     sp = (normalize2unity(sp, axis=1) * 255).astype(np.uint8)
 
@@ -558,9 +587,24 @@ class ActiveHandler(Handler):
 
     def __init__(self, active_parameters: ActiveParameters, clutter_estimate_window=1,
                  clutter_drift_compensation=False,
-                 eval_power=True, eval_coherence=False, eval_clutter=True):
+                 eval_power=True, eval_coherence=False, eval_clutter=True, add_sum_channel=True):
+        if len(active_parameters.channels) == 2 and add_sum_channel:
+            self.sum_channel = get_sum_channel(active_parameters.channels)
+            self.channels = tuple(
+                sorted(list(active_parameters.channels) + [self.sum_channel])
+            )
+            self.eval_sum_channel = True
+        elif add_sum_channel:
+            logging.warning('Unable to add sum channels - number of input channels is not 2')
+            self.sum_channel = None
+            self.channels = active_parameters.channels
+            self.eval_sum_channel = False
+        else:
+            self.sum_channel = None
+            self.channels = active_parameters.channels
+            self.eval_sum_channel = False
+
         self.active_parameters = active_parameters
-        self.channels = active_parameters.channels
 
         self.n_clutter_subtract_iter = 3
         self.clutter_estimate_window = clutter_estimate_window
@@ -571,10 +615,15 @@ class ActiveHandler(Handler):
 
         self.time_marks = []
         self.power = defaultdict(list) if self.eval_power else None
+        self.n_acc_power = defaultdict(list) if self.eval_power else None
         self.coherence = [] if self.eval_coherence else None
         self.clutter = defaultdict(list) if self.eval_clutter else None
         self.power_no_clutter = defaultdict(list) if self.eval_clutter else None
+        self.n_acc_power_no_clutter = defaultdict(list) if self.eval_clutter else None
+
+        # Buffers
         self._quads_no_clutter = {} if self.eval_clutter else None
+        self._current_quadratures = None
 
     def preproc_quads(self, quadratures: np.ndarray) -> np.ndarray:
         return quadratures
@@ -695,9 +744,34 @@ class ActiveHandler(Handler):
         power = self.calc_power(tmp_quads) / (1 + 1 / clutter_window)
         return clutter, power, tmp_quads
 
+    def calc_sum_quadratures(self, quadratures: Dict[Channel, np.ndarray]) -> np.ndarray:
+        assert len(quadratures) == 2
+        channels = list(quadratures.keys())
+        quads_ch1 = quadratures[channels[0]]
+        quads_ch2 = quadratures[channels[1]]
+
+        dist = self.active_parameters.distance['km']
+        dist_mask = dist < 600
+        dist_mask[:self.clutter_start_index] = False
+
+        # Remove phase distance bw channels
+        corr_coef = (quads_ch1[:, dist_mask] * quads_ch2[:, dist_mask].conj())\
+            .sum(axis=1, keepdims=True)
+        phase = np.angle(corr_coef)
+        quads_ch1 *= np.exp(-1j * phase)
+
+        sum_quads = quads_ch1 + quads_ch2
+
+        return sum_quads
+
     def handle(self, batch: ActiveBatch):
         time_marks = batch.time_marks
         quadratures = batch.quadratures
+
+        if self.eval_sum_channel:
+            quadratures[self.sum_channel] = self.calc_sum_quadratures(quadratures)
+
+        self._current_quadratures = quadratures
 
         for quads in quadratures.values():
             if len(quads.shape) != 2:
@@ -714,6 +788,7 @@ class ActiveHandler(Handler):
         if self.eval_power:
             for ch in channels:
                 self.power[ch].append(self.calc_power(quadratures[ch]))
+                self.n_acc_power[ch].append(len(quadratures[ch]))
 
         if self.eval_coherence:
             if len(channels) < 2:
@@ -728,19 +803,28 @@ class ActiveHandler(Handler):
                 cl, pwr, quads_no_clutter = self.estimate_clutter(quadratures[ch])
                 self.clutter[ch].append(cl)
                 self.power_no_clutter[ch].append(pwr)
+                self.n_acc_power_no_clutter[ch].append(len(quads_no_clutter))
                 self._quads_no_clutter[ch] = quads_no_clutter
 
     def finish(self) -> ActiveResult:
         """Output results"""
         # Convert evaluated quantities to 2-d arrays
+        if self.eval_sum_channel:
+            # active parameters are used as keys during aggregation
+            # so we are able to change channels only after all computations
+            self.active_parameters.channels = self.channels
+
         if self.eval_power:
             assert isinstance(self.power, dict)
 
             power = {}
+            n_acc_power = {}
             for ch in self.power:
                 power[ch] = np.stack(self.power[ch])
+                n_acc_power[ch] = np.array(self.n_acc_power[ch])
         else:
             power = None
+            n_acc_power = None
 
         if self.eval_coherence:
             assert isinstance(self.coherence, list)
@@ -753,15 +837,18 @@ class ActiveHandler(Handler):
 
             clutter = {}
             power_no_clutter = {}
+            n_acc_power_no_clutter = {}
             for ch in self.clutter:
                 clutter[ch] = np.stack(self.clutter[ch])
                 power_no_clutter[ch] = np.stack(self.power_no_clutter[ch])
+                n_acc_power_no_clutter[ch] = np.array(self.n_acc_power_no_clutter[ch])
         else:
             clutter = None
             power_no_clutter = None
+            n_acc_power_no_clutter = None
 
-        return ActiveResult(self.active_parameters, self.time_marks, power, coherence,
-                            clutter, power_no_clutter)
+        return ActiveResult(self.active_parameters, self.time_marks, power, n_acc_power, coherence,
+                            clutter, power_no_clutter, n_acc_power_no_clutter)
 
 
 class LongPulseActiveHandler(ActiveHandler):
@@ -786,6 +873,7 @@ class LongPulseActiveHandler(ActiveHandler):
         self.n_fft = n_fft
         self.n_spectra = n_spectra
         self.spectra = defaultdict(list)
+        self.n_acc_spectra = defaultdict(list)
         self._prep_spectra_constants()
 
     def _prep_spectra_constants(self):
@@ -852,16 +940,20 @@ class LongPulseActiveHandler(ActiveHandler):
             for ch, quads_ch in quadratures.items():
                 spectra_power = self.calc_spectra(quads_ch)
                 self.spectra[ch].append(spectra_power)
+                self.n_acc_spectra[ch].append(len(quads_ch))
 
     def finish(self) -> ActiveResult:
         results = super().finish()
 
         if self.n_fft is not None:
             stacked_spectra = {}
+            n_acc_spectra = {}
             for ch in self.active_parameters.channels:
                 stacked_spectra[ch] = np.stack(self.spectra[ch])
+                n_acc_spectra[ch] = np.array(self.n_acc_spectra[ch])
 
             results.spectra = stacked_spectra
+            results.n_acc_spectra = n_acc_spectra
             results.spectra_offsets = self.spectra_offset
         return results
 
