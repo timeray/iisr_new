@@ -4,3 +4,4 @@ __pycache__
 *.avi
 *.png
 pre_processing_config.ini
+/Debug/

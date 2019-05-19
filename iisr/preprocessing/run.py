@@ -5,7 +5,7 @@ import logging
 import time
 from datetime import timedelta
 from pathlib import Path
-
+from abc import ABCMeta, abstractmethod
 from typing import List, Union, Dict
 
 from iisr import iisr_io
@@ -15,7 +15,7 @@ from iisr.preprocessing.passive import PassiveSupervisor
 from iisr.representation import Channel
 from iisr.units import Frequency, TimeUnit
 from iisr.utils import merge, infinite_defaultdict
-from pyasp.stdparse import StdFile, AnnotatedData
+from iisr import StdFile, AnnotatedData
 
 
 def _merge_stdfiles(file1: StdFile, file2: StdFile) -> StdFile:
@@ -27,10 +27,66 @@ def _merge_stdfiles(file1: StdFile, file2: StdFile) -> StdFile:
     return StdFile(new_power, new_spectra)
 
 
-class LaunchConfig:
+class LaunchConfig(metaclass=ABCMeta):
+    paths = NotImplemented
+
+    @abstractmethod
+    def series_filter(self) -> iisr_io.SeriesSelector:
+        pass
+
+    @staticmethod
+    def _check_paths(paths: List[Path]):
+        if isinstance(paths, str):
+            paths = Path(paths)
+
+        if isinstance(paths, Path):
+            paths = [paths]
+
+        for path in paths:
+            if not isinstance(path, Path):
+                raise TypeError(f'Expect pathlib.Path, got {type(path)}')
+
+            if not path.exists():
+                raise ValueError(f'Given path not exists: {path}')
+
+        return paths
+
+    @staticmethod
+    def _check_positive_int(value: int):
+        assert isinstance(value, int)
+        assert value > 0
+        return value
+
+    @staticmethod
+    def _check_channels(channels: List[Channel]):
+        for ch in channels:
+            assert isinstance(ch, Channel)
+        return channels
+
+    @staticmethod
+    def _check_frequencies(frequencies: List[Frequency]):
+        if frequencies is not None:
+            for freq in frequencies:
+                assert isinstance(freq, Frequency)
+                assert (freq['MHz'] > 100) and (freq['MHz'] < 200.)
+        return frequencies
+
+    @staticmethod
+    def _check_timedelta(period: Union[int, timedelta]):
+        assert isinstance(period, (int, timedelta))
+        if isinstance(period, int):
+            period = timedelta(minutes=period)
+        return period
+
+    @abstractmethod
+    def __str__(self):
+        pass
+
+
+class IncoherentConfig(LaunchConfig):
     def __init__(self, paths: List[Path], output_formats: List[str],
-                 mode: str, n_accumulation: int, channels: List[Channel],
-                 frequencies: List[Frequency] = None, pulse_length: List[TimeUnit] = None,
+                 n_accumulation: int, channels: List[Channel],
+                 frequencies: List[Frequency] = None, pulse_lengths: List[TimeUnit] = None,
                  accumulation_timeout: Union[int, timedelta] = 60, n_fft: int = None,
                  n_spectra: int = None,
                  output_dir_prefix: str = '', clutter_estimate_window: int = None,
@@ -40,88 +96,70 @@ class LaunchConfig:
 
         Parameters
         ----------
-        paths: list of str
-             Paths to files or directories.
-        mode: 'incoherent', 'satellite' or 'passive'
-            Mode of operation.
+        paths: Path or list of Path
+            Paths to files or directories.
+        output_formats: str or list of str
+            Output formats.
         n_accumulation: int
             Number of accumulated samples.
         channels: list of int
             Channels to process. Must be in [0..3] range.
         frequencies: list of float or None, default None
             Frequencies to process, MHz. If None process all frequencies.
-        pulse_length: list of int or None, default None
+        pulse_lengths: list of int or None, default None
             Pulse length (in us) that should be processed. If None process all lengths.
         accumulation_timeout: timedelta or int
             Maximum time in minutes between first and last accumulated samples.
         n_fft: int
         """
-        if isinstance(paths, str):
-            paths = Path(paths)
-
-        if isinstance(paths, Path):
-            paths = [paths]
-
-        for path in paths:
-            if not isinstance(path, Path):
-                raise ValueError('Incorrect path: {}'.format(path))
-        self.paths = paths
-
-        output_formats = [fmt.lower() for fmt in output_formats]
-        for ofmt in output_formats:
-            if ofmt not in ['std', 'txt']:
-                raise ValueError('Incorrect output format: {}'.format(ofmt))
-        self.output_formats = output_formats
-
-        if mode not in ['incoherent', 'satellite', 'passive']:
-            raise ValueError('Incorrect mode: {}'.format(mode))
-        self.mode = mode
-
-        if not isinstance(n_accumulation, int):
-            raise ValueError('Incorrect number of accumulated samples: {}'
-                             ''.format(n_accumulation))
-        self.n_accumulation = n_accumulation
-
-        for ch in channels:
-            if not isinstance(ch, Channel):
-                raise TypeError('Incorrect channel type: {}'.format(type(ch)))
-        self.channels = channels
-
-        if frequencies is not None:
-            for freq in frequencies:
-                if not isinstance(freq, Frequency) or (freq['MHz'] < 150. or freq['MHz'] > 170.):
-                    raise ValueError('Incorrect frequency: {}'.format(freq))
-        self.frequencies = frequencies
-
-        if pulse_length is not None:
-            for len_ in pulse_length:
-                if not isinstance(len_, TimeUnit) or (len_['us'] < 0 or len_['us'] > 3000):
-                    raise ValueError('Incorrect pulse length: {}'.format(len_))
-        self.pulse_length = pulse_length
-
-        if isinstance(accumulation_timeout, timedelta):
-            self.accumulation_timeout = accumulation_timeout
-        elif isinstance(accumulation_timeout, int):
-            self.accumulation_timeout = timedelta(minutes=accumulation_timeout)
-        else:
-            raise ValueError('Incorrect accumulation timeout: {}'
-                             ''.format(accumulation_timeout))
+        # Check, transform and save input paramters
+        self.paths = self._check_paths(paths)
+        self.output_formats = self._check_output_formats(output_formats)
+        self.n_accumulation = self._check_positive_int(n_accumulation)
+        self.channels = self._check_channels(channels)
+        self.frequencies = self._check_frequencies(frequencies)
+        self.pulse_lengths = self._check_pulse_length(pulse_lengths)
+        self.accumulation_timeout = self._check_timedelta(accumulation_timeout)
 
         if clutter_estimate_window is not None:
             if not isinstance(clutter_estimate_window, int) or clutter_estimate_window < 1:
                 raise ValueError('Incorrect clutter estimation window: {}'
                                  ''.format(clutter_estimate_window))
 
-        self.n_fft = n_fft
+        self.n_fft = self._check_positive_int(n_fft)
+        self.n_spectra = self._check_positive_int(n_spectra)
 
-        if n_spectra is not None:
-            assert isinstance(n_spectra, int)
-            assert n_spectra > 0
-
-        self.n_spectra = n_spectra
+        assert isinstance(output_dir_prefix, str)
         self.output_dir_suffix = output_dir_prefix
-        self.clutter_estimate_window = clutter_estimate_window
+        self.clutter_estimate_window = self._check_positive_int(clutter_estimate_window)
+        assert isinstance(clutter_drift_compensation, bool)
         self.clutter_drift_compensation = clutter_drift_compensation
+
+    @staticmethod
+    def _check_output_formats(output_formats: List[str]):
+        output_formats = [fmt.lower() for fmt in output_formats]
+        for ofmt in output_formats:
+            if ofmt not in ['std', 'txt']:
+                raise ValueError('Incorrect output format: {}'.format(ofmt))
+        return output_formats
+
+    @staticmethod
+    def _check_pulse_length(pulse_lengths):
+        if pulse_lengths is not None:
+            for len_ in pulse_lengths:
+                assert isinstance(len_, TimeUnit)
+                assert len_['us'] > 0
+        return pulse_lengths
+
+    def series_filter(self) -> iisr_io.SeriesSelector:
+        filter_parameters = {}
+        if self.frequencies is not None:
+            filter_parameters['frequencies'] = self.frequencies
+        if self.channels is not None:
+            filter_parameters['channels'] = self.channels
+        if self.pulse_lengths is not None:
+            filter_parameters['pulse_lengths'] = self.pulse_lengths
+        return iisr_io.SeriesSelector(**filter_parameters)
 
     def __str__(self):
         msg = [
@@ -130,11 +168,10 @@ class LaunchConfig:
             'Paths:\n{}'.format('\n'.join((str(path) for path in self.paths))),
             'Output formats: {}'.format(', '.join(self.output_formats)),
             'Output directory suffix: {}'.format(self.output_dir_suffix),
-            'Mode: {}'.format(self.mode),
             'Number of accumulated samples: {}'.format(self.n_accumulation),
             'Channels: {}'.format(self.channels),
             'Frequencies: {} MHz'.format(self.frequencies),
-            'Pulse lengths: {} us'.format(self.pulse_length),
+            'Pulse lengths: {} us'.format(self.pulse_lengths),
             'Accumulation timeout: {:.2f} s'.format(self.accumulation_timeout.total_seconds()),
             'FFT length: {}'.format(self.n_fft),
             'Number of power spectra: {}'.format(self.n_spectra),
@@ -143,6 +180,10 @@ class LaunchConfig:
             ''.format(self.clutter_drift_compensation),
         ]
         return '\n'.join(msg)
+
+
+class PassiveConfig(LaunchConfig):
+    pass
 
 
 def _merge_and_save_stdfiles(results, manager):
@@ -206,34 +247,22 @@ def run_processing(config: LaunchConfig):
     start_time = time.time()
     logging.info(config)
 
-    # Filter realizations for each time step by channels_set, frequencies and other options
-    filter_parameters = {}
-    if config.frequencies is not None:
-        filter_parameters['frequencies'] = config.frequencies
-    if config.channels is not None:
-        filter_parameters['channels'] = config.channels
-    if config.pulse_length is not None:
-        filter_parameters['pulse_lengths'] = config.pulse_length
-
-    series_filter = iisr_io.SeriesSelector(**filter_parameters)
-
     # Initialize supervisor based on options
-    if config.mode == 'incoherent':
+    if isinstance(config, IncoherentConfig):
         supervisor = ActiveSupervisor(config.n_accumulation,
                                       n_fft=config.n_fft,
                                       n_spectra=config.n_spectra,
                                       timeout=config.accumulation_timeout,
                                       clutter_drift_compensation=config.clutter_drift_compensation,
                                       clutter_estimate_window=config.clutter_estimate_window)
-    elif config.mode == 'passive':
+    else:
         supervisor = PassiveSupervisor(config.n_accumulation, config.n_fft,
                                        timeout=config.accumulation_timeout)
-    else:
-        raise ValueError('Unknown mode: {}'.format(config.mode))
 
     # Process series
-    with iisr_io.read_files_by('blocks', paths=config.paths,
-                               series_selector=series_filter) as generator:
+    with iisr_io.read_files_by('blocks',
+                               paths=config.paths,
+                               series_selector=config.series_filter()) as generator:
         results = supervisor.process_packages(generator)
 
     # Gather results from handlers and save them

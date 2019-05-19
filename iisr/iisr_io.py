@@ -1081,6 +1081,9 @@ def read_files_by(read_type: str, paths: Iterable[Path], only_headers: bool = Fa
 
     file_paths = _collect_valid_file_paths(paths)
 
+    if not file_paths:
+        raise FileNotFoundError('No valid data files found')
+
     def _generator():
         for path_num, path in enumerate(file_paths, 1):
             logging.info('[{}/{}] Process file: {}'.format(path_num, len(file_paths), path))

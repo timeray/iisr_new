@@ -8,13 +8,7 @@ import sys
 from pathlib import Path
 import configparser
 from iisr.utils import DATE_FMT
-from iisr import IISR_PATH
-
-try:
-    from pyasp.stdparse import StdFile
-    has_pyasp = True
-except ImportError:
-    has_pyasp = False
+from iisr import IISR_PATH, StdFile
 
 
 DEFAULT_CONFIG = IISR_PATH / 'general_config.ini'

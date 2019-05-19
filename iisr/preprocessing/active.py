@@ -14,7 +14,7 @@ from iisr.representation import Channel, ADJACENT_CHANNELS, get_sum_channel
 from iisr.units import Frequency, TimeUnit, Distance
 from iisr.utils import TIME_FMT, DATE_FMT, central_time, normalize2unity
 from iisr.filtering import MedianAdAroundMedianFilter
-from pyasp.stdparse import StdFile, AnnotatedData, Header, StdMode
+from iisr import StdFile, AnnotatedData, Header, StdMode
 
 __all__ = ['calc_delays', 'delays2distance', 'ActiveParameters', 'ActiveResult',
            'ActiveSupervisor', 'LongPulseActiveHandler', 'ShortPulseActiveHandler',
