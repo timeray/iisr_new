@@ -3,7 +3,7 @@ Pre processing stage processing of IISR data.
 """
 import logging
 import time
-from datetime import timedelta
+import datetime as dt
 from pathlib import Path
 from abc import ABCMeta, abstractmethod
 from typing import List, Union, Dict
@@ -58,7 +58,7 @@ class LaunchConfig(metaclass=ABCMeta):
     def _check_channels(channels: List[Channel]):
         for ch in channels:
             assert isinstance(ch, Channel)
-        return channels
+        return tuple(sorted(set(channels)))
 
     @staticmethod
     def _check_frequencies(frequencies: List[Frequency]):
@@ -69,10 +69,10 @@ class LaunchConfig(metaclass=ABCMeta):
         return frequencies
 
     @staticmethod
-    def _check_timedelta(period: Union[int, timedelta]):
-        assert isinstance(period, (int, timedelta))
+    def _check_timedelta(period: Union[int, dt.timedelta]):
+        assert isinstance(period, (int, dt.timedelta))
         if isinstance(period, int):
-            period = timedelta(minutes=period)
+            period = dt.timedelta(minutes=period)
         return period
 
     @abstractmethod
@@ -84,7 +84,7 @@ class IncoherentConfig(LaunchConfig):
     def __init__(self, paths: List[Path], output_formats: List[str],
                  n_accumulation: int, channels: List[Channel],
                  frequencies: List[Frequency] = None, pulse_lengths: List[TimeUnit] = None,
-                 accumulation_timeout: Union[int, timedelta] = 60, n_fft: int = None,
+                 accumulation_timeout: Union[int, dt.timedelta] = 60, n_fft: int = None,
                  n_spectra: int = None,
                  output_dir_prefix: str = '', clutter_estimate_window: int = None,
                  clutter_drift_compensation: bool = False):
@@ -105,7 +105,7 @@ class IncoherentConfig(LaunchConfig):
             Frequencies to process, MHz. If None process all frequencies.
         pulse_lengths: list of int or None, default None
             Pulse length (in us) that should be processed. If None process all lengths.
-        accumulation_timeout: timedelta or int
+        accumulation_timeout: dt.timedelta or int
             Maximum time in minutes between first and last accumulated samples.
         n_fft: int
         """
@@ -180,7 +180,40 @@ class IncoherentConfig(LaunchConfig):
 
 
 class PassiveConfig(LaunchConfig):
-    pass
+    def __init__(self, paths: List[Path], output_dir_suffix: str, n_accumulation: int,
+                 n_fft: int, channels: List[Channel], frequencies: List[Frequency] = None,
+                 accumulation_timeout: Union[int, dt.timedelta] = dt.timedelta(minutes=60)):
+        self.paths = self._check_paths(paths)
+
+        assert isinstance(output_dir_suffix, str)
+        self.output_dir_suffix = output_dir_suffix
+        self.n_accumulation = self._check_positive_int(n_accumulation)
+        self.n_fft = self._check_positive_int(n_fft)
+        self.channels = self._check_channels(channels)
+        self.frequencies = self._check_frequencies(frequencies)
+        self.accumulation_timeout = self._check_timedelta(accumulation_timeout)
+
+    def series_filter(self) -> iisr_io.SeriesSelector:
+        filter_parameters = {}
+        if self.frequencies is not None:
+            filter_parameters['frequencies'] = self.frequencies
+        if self.channels is not None:
+            filter_parameters['channels'] = self.channels
+        return iisr_io.SeriesSelector(**filter_parameters)
+
+    def __str__(self):
+        msg = [
+            f'Launch configuration',
+            f'--------------------',
+            'Paths:\n{}'.format('\n'.join((str(path) for path in self.paths))),
+            f'Output directory suffix: {self.output_dir_suffix}',
+            'Number of accumulated samples: {}'.format(self.n_accumulation),
+            f'Channels: {self.channels}',
+            f'Frequencies: {self.frequencies} MHz',
+            f'Accumulation timeout: {self.accumulation_timeout.total_seconds():.2f} s',
+            f'FFT length: {self.n_fft}',
+        ]
+        return '\n'.join(msg)
 
 
 def _merge_and_save_stdfiles(results, manager):
@@ -252,9 +285,12 @@ def run_processing(config: LaunchConfig):
                                       timeout=config.accumulation_timeout,
                                       clutter_drift_compensation=config.clutter_drift_compensation,
                                       clutter_estimate_window=config.clutter_estimate_window)
-    else:
-        supervisor = PassiveSupervisor(config.n_accumulation, config.n_fft,
+    elif isinstance(config, PassiveConfig):
+        supervisor = PassiveSupervisor(n_accumulation=config.n_accumulation,
+                                       n_fft=config.n_fft,
                                        timeout=config.accumulation_timeout)
+    else:
+        raise RuntimeError('Unknown config type')
 
     # Process series
     with iisr_io.read_files_by('blocks',

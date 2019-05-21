@@ -18,7 +18,7 @@ import os
 import tempfile
 import struct
 import logging
-from collections import namedtuple, defaultdict
+from collections import namedtuple, defaultdict, OrderedDict
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -26,12 +26,12 @@ from typing import IO, Dict, Tuple, Iterable, List, Union
 
 import numpy as np
 
-from iisr.representation import Channel, CHANNELS_INFO
+from iisr.representation import Channel, CHANNELS_INFO, HORN_CHANNELS_MAP
 from iisr import units
 from iisr.units import Frequency, TimeUnit
 
 __all__ = ['DataFileReader', 'DataFileWriter', 'open_data_file', 'read_files_by',
-           'TimeSeriesPackage', 'ExperimentParameters']
+           'TimeSeriesPackage', 'ExperimentParameters', 'FileInfo', 'TimeSeries']
 ARCHIVE_EXTENSION = '.gz'
 FILE_EXTENSIONS = ('.ISE', '.ISE.GZ', '.IST', '.IST.GZ')
 DELAY_FORMULA_CONSTANT = -960 - 50
@@ -353,6 +353,7 @@ def _raw2refined_parameters(raw_parameters: Dict[str, int],
 
     # Magic vague formula to calculate total delay
     total_delay = first_delay - offset_st1 - long_pulse_len + DELAY_FORMULA_CONSTANT
+    assert total_delay > 0
 
     # Time
     month_day = raw_parameters['date_mon_day']
@@ -426,9 +427,9 @@ def _datetime2raw(dtime: datetime) -> RawDateTime:
     return RawDateTime(date_year, date_mon_day, time_h_m, time_sec, time_msec)
 
 
-def _refined2raw_parameters(time_mark: datetime, refined_parameters: SeriesParameters,
+def _refined2raw_parameters(time_mark: datetime, refined_parameters: List[SeriesParameters],
                             offset_st1: int = 80, decimation: int = 2
-                            ) -> Tuple[Dict[int, int], int]:
+                            ) -> Tuple[List[Dict[int, int]], List[int]]:
     """Convert refined series parameters to raw encoded parameters. Additional arguments are used
     to define parameters that are not contained in SeriesParameters.
 
@@ -442,52 +443,71 @@ def _refined2raw_parameters(time_mark: datetime, refined_parameters: SeriesParam
         raw_parameters: Dictionary of codes and values.
         data_byte_length: Length of corresponding data block.
     """
-    raw_parameters = {'number_all': refined_parameters.n_samples * decimation}
-    # Reclaim unused raw_parameters
-    data_byte_length = refined_parameters.n_samples * 4
-    raw_parameters['sample_freq'] = int(refined_parameters.sampling_frequency['kHz'] * decimation)
-    raw_parameters['offset_st1'] = offset_st1
+    # Make channel: params dict. Assert input channels are unique
+    params_dict = OrderedDict()
+    for pars in refined_parameters:
+        params_dict[pars.channel] = pars
+    assert len(params_dict) == len(refined_parameters)
 
-    pulse_type = refined_parameters.pulse_type
-    if pulse_type is 'long':
-        long_pulse_len = int(refined_parameters.pulse_length['us'])
-    else:
-        long_pulse_len = 0
+    raw_parameters_list = []
+    data_byte_lengths = []
+    for ch, params in params_dict.items():  # type: Channel, SeriesParameters
+        horn_adjacent_ch = HORN_CHANNELS_MAP[ch]
+        adjacent_params = params_dict.get(horn_adjacent_ch)
 
-    raw_parameters['first_delay'] = int(refined_parameters.total_delay['us']) \
-                                    + raw_parameters['offset_st1'] \
-                                    + long_pulse_len \
-                                    - DELAY_FORMULA_CONSTANT
+        raw_parameters = {'number_all': params.n_samples * decimation}
+        # Reclaim unused raw_parameters
+        data_byte_length = params.n_samples * 4
+        raw_parameters['sample_freq'] = int(params.sampling_frequency['kHz'] * decimation)
+        raw_parameters['offset_st1'] = offset_st1
 
-    raw_parameters['channel'] = _channel2raw(refined_parameters.channel)
-    raw_parameters['phase_code'] = refined_parameters.phase_code
+        pulse_type = params.pulse_type
+        if pulse_type is 'short':
+            long_pulse_len = int(params.pulse_length['us'])
+        else:
+            long_pulse_len = 0
 
-    # Time options
-    raw_dtime = _datetime2raw(time_mark)
-    raw_parameters['date_year'] = raw_dtime.date_year
-    raw_parameters['date_mon_day'] = raw_dtime.date_mon_day
-    raw_parameters['time_h_m'] = raw_dtime.time_h_m
-    raw_parameters['time_sec'] = raw_dtime.time_sec
-    raw_parameters['time_msec'] = raw_dtime.time_msec
+        raw_parameters['first_delay'] = int(params.total_delay['us']) \
+                                        + raw_parameters['offset_st1'] \
+                                        + long_pulse_len \
+                                        - DELAY_FORMULA_CONSTANT
 
-    # Antenna end
-    if refined_parameters.antenna_end is not None:
-        antenna_end = refined_parameters.antenna_end
-    else:
-        antenna_end = 'st1'  # default
+        raw_parameters['channel'] = _channel2raw(params.channel)
+        raw_parameters['phase_code'] = params.phase_code
 
-    # Frequency
-    fr_lo, fr_hi = _frequency2raw(refined_parameters.frequency)
-    raw_parameters['{}_{}_fr_lo'.format(antenna_end, pulse_type)] = fr_lo
-    raw_parameters['{}_{}_fr_hi'.format(antenna_end, pulse_type)] = fr_hi
+        # Time options
+        raw_dtime = _datetime2raw(time_mark)
+        raw_parameters['date_year'] = raw_dtime.date_year
+        raw_parameters['date_mon_day'] = raw_dtime.date_mon_day
+        raw_parameters['time_h_m'] = raw_dtime.time_h_m
+        raw_parameters['time_sec'] = raw_dtime.time_sec
+        raw_parameters['time_msec'] = raw_dtime.time_msec
 
-    raw_parameters['{}_{}_len'.format(antenna_end, pulse_type)] \
-        = int(refined_parameters.pulse_length['us'])
+        # Antenna end
+        if params.antenna_end is not None:
+            antenna_end = params.antenna_end
+        else:
+            antenna_end = 'st1'  # default
 
-    # Encode parameters
-    raw_parameters = {RAW_NAME_TO_CODE[name]: value for name, value in raw_parameters.items()}
+        # Frequency
+        fr_lo, fr_hi = _frequency2raw(params.frequency)
+        raw_parameters['{}_{}_fr_lo'.format(antenna_end, pulse_type)] = fr_lo
+        raw_parameters['{}_{}_fr_hi'.format(antenna_end, pulse_type)] = fr_hi
 
-    return raw_parameters, data_byte_length
+        raw_parameters['{}_{}_len'.format(antenna_end, pulse_type)] \
+            = int(params.pulse_length['us'])
+
+        if adjacent_params is not None:
+            raw_parameters['{}_{}_len'.format(antenna_end, adjacent_params.pulse_type)] \
+                = int(adjacent_params.pulse_length['us'])
+
+        # Encode parameters
+        raw_parameters = {RAW_NAME_TO_CODE[name]: value for name, value in raw_parameters.items()}
+
+        raw_parameters_list.append(raw_parameters)
+        data_byte_lengths.append(data_byte_length)
+
+    return raw_parameters_list, data_byte_lengths
 
 
 class SeriesSelector:
@@ -882,24 +902,29 @@ class DataFileWriter(DataFileIO):
                 return True
         return False
 
-    def write(self, series: TimeSeries):
+    def write(self, series_package: TimeSeriesPackage):
         """Write series to IISR file stream."""
-        raw_parameters, data_byte_length = _refined2raw_parameters(series.time_mark,
-                                                                   series.parameters)
+        time_mark = series_package.time_mark
+        series_list = series_package.time_series_list
+        params_list = [series.parameters for series in series_list]
 
-        # Global header
-        global_header = {}
-        for name in self.global_parameters_names:
-            if name in raw_parameters:
-                code = RAW_NAME_TO_CODE[name]
-                global_header[code] = raw_parameters.pop(code)
+        raw_params_list, data_byte_lengths = _refined2raw_parameters(time_mark, params_list)
 
-        if self._isnew_global_header(global_header):
-            self._write_header('global', global_header)
-            self.current_global_header = global_header
+        zipped_sequences = zip(raw_params_list, data_byte_lengths, series_list)
+        for raw_parameters, data_byte_length, series in zipped_sequences:
+            # Global header
+            global_header = {}
+            for name in self.global_parameters_names:
+                if name in raw_parameters:
+                    code = RAW_NAME_TO_CODE[name]
+                    global_header[code] = raw_parameters.pop(code)
 
-        self._write_header('super', raw_parameters)
-        self._write_data_block(series.quadratures, data_byte_length)
+            if self._isnew_global_header(global_header):
+                self._write_header('global', global_header)
+                self.current_global_header = global_header
+
+            self._write_header('super', raw_parameters)
+            self._write_data_block(series.quadratures, data_byte_length)
 
     def write_series_package(self, block):
         """
@@ -1040,13 +1065,13 @@ def _collect_valid_file_paths(paths: Union[Path, Iterable[Path]]) -> List[Path]:
     files_paths = []
 
     def check_and_add_path(new_path: Path):
-        if new_path.exists() and new_path.suffix.upper().endswith(FILE_EXTENSIONS):
+        if new_path.exists() and new_path.name.upper().endswith(FILE_EXTENSIONS):
             files_paths.append(new_path.resolve())
 
     for path in paths:
         if path.is_dir():
-            for file_in_dir in sorted(os.listdir(str(path))):
-                check_and_add_path(path / file_in_dir)
+            for filepath in path.iterdir():
+                check_and_add_path(filepath)
         else:
             check_and_add_path(path)
 

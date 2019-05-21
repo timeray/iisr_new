@@ -3,7 +3,7 @@ Collect classes for IISR data representation.
 """
 from typing import Sequence
 
-__all__ = ['CHANNELS_INFO', 'Channel', 'ReprJSONDecoder', 'ReprJSONEncoder']
+__all__ = ['CHANNELS_INFO', 'Channel', 'ReprJSONDecoder', 'ReprJSONEncoder', 'ADJACENT_CHANNELS']
 
 from iisr.units import UnitsJSONDecoder, UnitsJSONEncoder
 
@@ -70,6 +70,8 @@ def get_sum_channel(channels: Sequence[Channel]):
 
 ADJACENT_CHANNELS = {Channel(0): Channel(2), Channel(1): Channel(3),
                      Channel(2): Channel(0), Channel(3): Channel(1)}
+HORN_CHANNELS_MAP = {Channel(0): Channel(1), Channel(1): Channel(0),
+                     Channel(2): Channel(3), Channel(3): Channel(2)}
 
 JSON_REPR_TYPE_STR = '_repr_type'
 

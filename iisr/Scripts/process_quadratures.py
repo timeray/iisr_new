@@ -112,18 +112,23 @@ def main(argv=None):
     cfg_mode = config[mode]
     paths = _parse_path(cfg_mode['paths'])
     output_dir_prefix = cfg_mode['output_folder_suffix']
+    n_accumulation = int(cfg_mode['n_accumulation'])
+    channels = _parse_channels(cfg_mode['channels'])
+    frequencies = _parse_frequency(cfg_mode['frequencies'])
+    accumulation_timeout = int(cfg_mode['accumulation_timeout'])
+    n_fft = int(cfg_mode['n_fft'])
 
     if mode == 'incoherent':
         launch_config = IncoherentConfig(
             paths=paths,
             output_formats=_parse_list(cfg_mode['output_formats']),
             output_dir_prefix=output_dir_prefix,
-            n_accumulation=int(cfg_mode['n_accumulation']),
-            channels=_parse_channels(cfg_mode['channels']),
-            frequencies=_parse_frequency(cfg_mode['frequencies']),
+            n_accumulation=n_accumulation,
+            channels=channels,
+            frequencies=frequencies,
             pulse_lengths=_parse_time_units(cfg_mode['pulse_lengths']),
-            accumulation_timeout=int(cfg_mode['accumulation_timeout']),
-            n_fft=int(cfg_mode['n_fft']),
+            accumulation_timeout=accumulation_timeout,
+            n_fft=n_fft,
             n_spectra=int(cfg_mode['n_spectra']),
             clutter_estimate_window=_parse_optional_int(cfg_mode['clutter_estimate_window']),
             clutter_drift_compensation=_parse_boolean(
@@ -131,7 +136,15 @@ def main(argv=None):
             ),
         )
     elif mode == 'passive':
-        launch_config = PassiveConfig()
+        launch_config = PassiveConfig(
+            paths=paths,
+            output_dir_suffix=output_dir_prefix,
+            n_accumulation=n_accumulation,
+            n_fft=n_fft,
+            channels=channels,
+            frequencies=frequencies,
+            accumulation_timeout=accumulation_timeout,
+        )
     else:
         raise RuntimeError('Should not reach here')
     run_processing(launch_config)

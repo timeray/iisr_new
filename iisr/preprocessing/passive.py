@@ -1,4 +1,4 @@
-import datetime as dtime
+import datetime as dt
 from collections import defaultdict
 from enum import Enum
 
@@ -78,7 +78,7 @@ class PassiveScanParameters(PassiveParameters):
     params_to_save = ['date', 'sampling_frequency', 'n_accumulation', 'n_fft',
                       'central_frequencies', 'channels', 'band_type']
 
-    def __init__(self, date: dtime.date, sampling_frequency: Frequency, n_accumulation: int,
+    def __init__(self, date: dt.date, sampling_frequency: Frequency, n_accumulation: int,
                  n_fft: int, central_frequencies: Tuple[Frequency], channels: List[Channel],
                  band_type: str):
         self.date = date  # Limit handler to a single date to save space for large arrays
@@ -94,7 +94,7 @@ class PassiveTrackParameters(PassiveParameters):
     params_to_save = ['date', 'sampling_frequency', 'n_accumulation', 'n_fft', 'channels',
                       'band_type']
 
-    def __init__(self, date: dtime.date, sampling_frequency: Frequency, n_accumulation: int,
+    def __init__(self, date: dt.date, sampling_frequency: Frequency, n_accumulation: int,
                  n_fft: int, channels: List[Channel], band_type: str):
         self.dates = date  # Limit handler to a single date to save space for large arrays
         self.sampling_frequency = sampling_frequency
@@ -127,7 +127,7 @@ class PassiveScanResult(HandlerResult):
                 raise ValueError('Expect coherence to be complex valued')
 
         self.parameters = parameters
-        self.time_marks = np.array(time_marks, dtype=dtime.datetime)
+        self.time_marks = np.array(time_marks, dtype=dt.datetime)
         self.frequencies = frequencies
         self.spectra = spectra
         self.coherence = coherence
@@ -136,7 +136,7 @@ class PassiveScanResult(HandlerResult):
     def short_name(self) -> str:
         return 'ch{}'.format(self.parameters.channels)
 
-    def save_txt(self, file: IO, save_date: dtime.date = None):
+    def save_txt(self, file: IO, save_date: dt.date = None):
         raise NotImplementedError
 
     @classmethod
@@ -171,7 +171,7 @@ class PassiveTrackResult(HandlerResult):
                 raise ValueError('Expect coherence to be complex valued')
 
         self.parameters = parameters
-        self.time_marks = np.array(time_marks, dtype=dtime.datetime)
+        self.time_marks = np.array(time_marks, dtype=dt.datetime)
         self._frequencies = None
         self.central_frequencies = central_frequencies
         self.spectra = spectra
@@ -204,7 +204,7 @@ class PassiveTrackResult(HandlerResult):
 
         return self._frequencies
 
-    def save_txt(self, file: IO, save_date: dtime.date = None):
+    def save_txt(self, file: IO, save_date: dt.date = None):
         raise NotImplementedError
 
     @classmethod
@@ -364,7 +364,7 @@ class PassiveScanHandler(PassiveHandler):
         return frequencies, band_masks
 
     def finish(self):
-        time_marks = np.array(self.time_marks, dtype=dtime.datetime)
+        time_marks = np.array(self.time_marks, dtype=dt.datetime)
 
         # Convert to numpy arrays
         frequencies = Frequency(self.frequencies, 'Hz')
@@ -393,7 +393,7 @@ class PassiveTrackHandler(PassiveHandler):
         self.central_frequencies.append(batch.batch_params['central_frequency'])
 
     def finish(self):
-        time_marks = np.array(self.time_marks, dtype=dtime.datetime)
+        time_marks = np.array(self.time_marks, dtype=dt.datetime)
         central_frequencies = Frequency(np.array(self.central_frequencies))
 
         # Convert to numpy arrays
@@ -412,11 +412,11 @@ class PassiveSupervisor(Supervisor):
     """Supervisor that manages passive processing"""
     AggYieldType = Tuple[HandlerParameters, List[np.ndarray], Dict, PassiveAggQuadratures]
 
-    def __init__(self, n_accumulation: int, n_fft: int, timeout: dtime.timedelta,
+    def __init__(self, n_accumulation: int, n_fft: int, timeout: dt.timedelta,
                  eval_spectra: bool = True, eval_coherence: bool = True):
-        super().__init__(timeout=timeout)
         self.n_accumulation = n_accumulation
         self.n_fft = n_fft
+        self.timeout = timeout
 
         self.n_accumulated_samples = n_fft * n_accumulation
 
@@ -566,7 +566,7 @@ class PassiveSupervisor(Supervisor):
                     acc_time_marks = []
                     for series in single_freq_acc_series_dict[channels[0]]:
                         acc_time_marks.extend([series.time_mark] * n_oversample)
-                    time_marks.append(np.array(acc_time_marks, dtype=dtime.datetime))
+                    time_marks.append(np.array(acc_time_marks, dtype=dt.datetime))
 
                     for ch in channels:
                         # n_acc x n_samples

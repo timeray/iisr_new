@@ -30,7 +30,7 @@ def get_test_raw_parameters(freq=155000, pulse_len=700, stel='st1', channel=0, y
         'step': 2,
         'number_all': 2048,
         'number_after': 1024,
-        'first_delay': 1000,
+        'first_delay': 2000,
         'channel': channel,
         'date_year': year,
         'date_mon_day': (month << 8) + day,
@@ -90,7 +90,8 @@ def make_random_test_file(n_unique_series=2, n_time_marks=2, time_step_sec=1):
         random.shuffle(pulse_len)
         phase_code = [0, 5]
         random.shuffle(phase_code)
-        for freq, ch, length, code in it.product(freqs, channels, pulse_len, phase_code):
+        # Channels must change first, as in original data
+        for code, length, freq, ch in it.product(phase_code, pulse_len, freqs, channels):
             yield get_test_parameters(freq=freq, channel=ch, pulse_len=length, phase_code=code)
 
     generator = gen_unique_parameters()
@@ -98,9 +99,11 @@ def make_random_test_file(n_unique_series=2, n_time_marks=2, time_step_sec=1):
     for i in range(n_unique_series):
         parameter_sets.append(generator.__next__())
 
-    series_list = []
+    packages_list = []
+    all_series_list = []
     for i in range(n_time_marks):
         time_mark = DEFAULT_DATETIME + timedelta(seconds=time_step_sec * i)
+        series_list = []
         for parameters in parameter_sets:
             n_samples = parameters.n_samples
             quad_i = np.random.randint(-2 ** 15 + 1, 2 ** 15, n_samples)
@@ -108,14 +111,17 @@ def make_random_test_file(n_unique_series=2, n_time_marks=2, time_step_sec=1):
             quadratures = quad_i + 1j * quad_q
             series = iisr_io.TimeSeries(time_mark, parameters, quadratures)
             series_list.append(series)
+            all_series_list.append(series)
+
+        packages_list.append(iisr_io.TimeSeriesPackage(time_mark, series_list))
 
     with tempfile.TemporaryDirectory() as temp_dirname:
         file_path = Path(temp_dirname) / DUMMY_FILE_NAME
-        with iisr_io.open_data_file(file_path, 'w') as writer:
-            for series in series_list:
-                writer.write(series)
+        with iisr_io.open_data_file(file_path, 'w') as writer:  # type: iisr_io.DataFileWriter
+            for package in packages_list:
+                writer.write(package)
 
-        yield file_path, series_list
+        yield file_path, all_series_list
 
 
 class TestSeriesParameters(TestCase):
@@ -246,9 +252,11 @@ class TestParametersTransformation(TestCase):
         test_file_info = get_file_info()
 
         # Need to copy options, because transformation change input dictionary
-        result = iisr_io._raw2refined_parameters(test_raw_parameters.copy(), test_byte_length,
-                                                 test_file_info)
-        raw_parameters, byte_length = iisr_io._refined2raw_parameters(*result)
+        time_mark, pars = iisr_io._raw2refined_parameters(test_raw_parameters.copy(),
+                                                          test_byte_length, test_file_info)
+        raw_parameters, byte_length = iisr_io._refined2raw_parameters(time_mark, [pars])
+        raw_parameters = raw_parameters[0]
+        byte_length = byte_length[0]
         self.assertEqual(test_byte_length, byte_length)
 
         # Refined parameters contain only minimal amount of information from raw parameters
@@ -361,7 +369,8 @@ class TestRead(TestCase):
                     test_quadratures = test_quad_i + 1j * test_quad_q
 
                     series = iisr_io.TimeSeries(DEFAULT_DATETIME, param, test_quadratures)
-                    data_file.write(series)
+                    package = iisr_io.TimeSeriesPackage(DEFAULT_DATETIME, [series])
+                    data_file.write(package)
 
             # Check if selector correct
             with iisr_io.open_data_file(test_filepath, series_selector=filter_) as reader:
@@ -420,8 +429,9 @@ class TestWriteRead(TestCase):
             test_quadratures = test_quad_i + 1j * test_quad_q
 
             test_series = iisr_io.TimeSeries(time_mark, test_parameters, test_quadratures)
+            test_package = iisr_io.TimeSeriesPackage(time_mark, [test_series])
             with iisr_io.open_data_file(test_file_path, 'w') as writer:
-                writer.write(test_series)
+                writer.write(test_package)
 
             with iisr_io.open_data_file(test_file_path, 'r') as reader:
                 series = next(reader.read_series())
@@ -474,13 +484,18 @@ class TestDataFileReaderTimeBugFix(TestCase):
             test_quadratures = test_quad_i + 1j * test_quad_q
 
             test_series = []
+            test_packages = []
             for time_mark in time_marks:
+                tm_series = []
                 for params in test_parameters:
-                    test_series.append(iisr_io.TimeSeries(time_mark, params, test_quadratures))
+                    series = iisr_io.TimeSeries(time_mark, params, test_quadratures)
+                    test_series.append(series)
+                    tm_series.append(series)
+                test_packages.append(iisr_io.TimeSeriesPackage(time_mark, tm_series))
 
             with iisr_io.open_data_file(test_file_path, 'w') as writer:
-                for series in test_series:
-                    writer.write(series)
+                for package in test_packages:
+                    writer.write(package)
 
             with open(str(test_file_path), 'rb') as file:
                 reader = iisr_io.DataFileReader(file, file_info=get_file_info(),
@@ -559,16 +574,34 @@ class TestCollectPaths(TestCase):
         with tempfile.TemporaryDirectory() as dirname:
             dirpath = Path(dirname)
             test_paths = []
-            for i in range(10):
-                filename = '{}.iSe'.format(i)
-                filepath = dirpath / filename
+
+            def _make_file(name):
+                filepath = dirpath / name
                 filepath.touch()
                 test_paths.append(filepath)
+
+            for i in range(10):
+                _make_file('{}.iSe'.format(i))
+
+            _make_file('is_compressed.ise.gz')
+            _make_file('sat_compressed.ist.gz')
+            _make_file('sat.ist')
+
+            # Wrong filenames
+            n_wrong = 0
+
+            def _wrong(func):
+                nonlocal n_wrong
+                n_wrong += 1
+                return func
+
+            _wrong(_make_file('bad_extension.isp'))
+            _wrong(_make_file('bad_extension_compressed.isp.gz'))
 
             paths = iisr_io._collect_valid_file_paths(dirpath)
 
             # Should be sorted
-            for test_path, path in zip(test_paths, paths):
+            for test_path, path in it.zip_longest(sorted(test_paths[:-n_wrong]), sorted(paths)):
                 self.assertEqual(test_path, path)
 
 
