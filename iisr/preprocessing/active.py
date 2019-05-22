@@ -626,7 +626,7 @@ class ActiveHandler(Handler):
 
         self.active_parameters = active_parameters
 
-        self.n_clutter_subtract_iter = 3
+        self.n_clutter_subtract_iter = 2
         self.clutter_estimate_window = clutter_estimate_window
 
         self.eval_power = eval_power
@@ -920,7 +920,7 @@ class LongPulseActiveHandler(ActiveHandler):
             sp_indexes[i] = list(np.arange(sp_indexes[i], sp_indexes[i] + pulse_length_points))
         self.sp_indexes = sp_indexes
 
-        # Calculate mask that define out frequences
+        # Calculate mask that defines output frequencies
         if pulse_length_points >= self.n_fft:
             self.sp_center_mask = np.ones(pulse_length_points, dtype=bool)
         else:
