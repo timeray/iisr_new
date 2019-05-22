@@ -63,7 +63,7 @@ def _parse_path(paths: str) -> List[Path]:
     parsed_paths = []
     for path in _parse_list(paths):
         if path != '~':
-            parsed_paths.append(path)
+            parsed_paths.append(Path(path))
         else:
             parsed_paths.append(Path.home())
     return parsed_paths

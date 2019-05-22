@@ -36,9 +36,6 @@ class LaunchConfig(metaclass=ABCMeta):
 
     @staticmethod
     def _check_paths(paths: List[Path]):
-        if isinstance(paths, str):
-            paths = Path(paths)
-
         if isinstance(paths, Path):
             paths = [paths]
 
