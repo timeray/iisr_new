@@ -2,18 +2,18 @@ import json
 import warnings
 import logging
 from abc import ABCMeta, abstractmethod
-from datetime import date, timedelta, datetime
+import datetime as dt
 
 import numpy as np
 from scipy import fftpack
-from typing import IO, List, TextIO, Union, Generator, Any, Iterator, Tuple
+from typing import IO, List, TextIO, Union, Generator, Any, Iterator, Tuple, BinaryIO
 
 from iisr.iisr_io import TimeSeriesPackage
 from iisr.representation import ReprJSONEncoder, ReprJSONDecoder
 
 
 class HandlerResult(metaclass=ABCMeta):
-    dates = NotImplemented  # type: Union[List[date], date]
+    dates = NotImplemented  # type: Union[List[dt.date], dt.date]
     mode_name = NotImplemented  # type: str
 
     @property
@@ -22,13 +22,22 @@ class HandlerResult(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def save_txt(self, file: IO, save_date: date = None):
+    def save_txt(self, file: IO, save_date: dt.date = None):
         """Save results to file. If save_date is passed, save specific date."""
 
     @classmethod
     @abstractmethod
     def load_txt(cls, file: List[IO]) -> 'HandlerResult':
         """Load results from list of files."""
+
+    @abstractmethod
+    def save_pickle(self, file: BinaryIO, save_date: dt.date = None):
+        """Pickle results to file."""
+
+    @classmethod
+    @abstractmethod
+    def load_pickle(cls, file: List[BinaryIO]) -> 'HandlerResult':
+        """Unpickle results."""
 
 
 class HandlerBatch(metaclass=ABCMeta):
@@ -157,22 +166,22 @@ def timeout_filter(timeout, invalid_time_mark_policy: str = 'yield_timeout'
     is_timeout = False
 
     while True:
-        package = yield is_timeout  # type: TimeSeriesPackage
+        package = yield is_timeout
 
         if prev_time_mark is None:
-            time_diff = timedelta(0)
+            time_diff = dt.timedelta(0)
         else:
             time_diff = package.time_mark - prev_time_mark
 
         if time_diff > timeout:
             is_timeout = True
 
-        elif time_diff < timedelta(0):
+        elif time_diff < dt.timedelta(0):
             # Known issues
             test_time_mark = package.time_mark.replace(second=0, microsecond=0)
-            if test_time_mark == datetime(2015, 6, 5, 1, 36):
+            if test_time_mark == dt.datetime(2015, 6, 5, 1, 36):
                 is_timeout = True
-            elif test_time_mark == datetime(2015, 6, 5, 13, 7):
+            elif test_time_mark == dt.datetime(2015, 6, 5, 13, 7):
                 is_timeout = True
             else:
                 err_msg = 'New time mark is earlier than previous (new {}, prev {})'\
@@ -191,11 +200,8 @@ def timeout_filter(timeout, invalid_time_mark_policy: str = 'yield_timeout'
 class Supervisor(metaclass=ABCMeta):
     """Supervisor manages data processing for specific mode of operation"""
     @abstractmethod
-    def aggregator(
-            self,
-            packages: Iterator[TimeSeriesPackage],
-            drop_timeout_series: bool = True
-    ) -> Generator[Tuple[HandlerParameters, HandlerBatch], Any, Any]:
+    def aggregator(self, packages: Iterator[TimeSeriesPackage],
+                   ) -> Generator[Tuple[HandlerParameters, HandlerBatch], Any, Any]:
         """Aggregate input packages by parameters to create arrays of quadratures"""
 
     @abstractmethod

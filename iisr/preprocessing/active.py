@@ -5,7 +5,7 @@ from datetime import datetime, date, timedelta
 
 import numpy as np
 from scipy import signal
-from typing import List, TextIO, Dict, Sequence, Tuple, Generator, Iterator, Any
+from typing import List, TextIO, Dict, Sequence, Tuple, Generator, Iterator, Any, BinaryIO
 
 from iisr.iisr_io import ExperimentParameters, TimeSeriesPackage
 from iisr.preprocessing.representation import HandlerResult, Handler, HandlerParameters, \
@@ -593,6 +593,12 @@ class ActiveResult(HandlerResult):
         return cls(params, sorted(time_marks), power=power, coherence=coherence, clutter=clutter,
                    power_no_clutter=power_no_clutter)
 
+    def save_pickle(self, file: BinaryIO, save_date: date = None):
+        raise NotImplementedError
+
+    def load_pickle(cls, file: List[BinaryIO]) -> 'HandlerResult':
+        raise NotImplementedError
+
 
 class ActiveBatch(HandlerBatch):
     def __init__(self, time_marks: np.ndarray, quadratures: Dict):
@@ -1050,7 +1056,7 @@ class ActiveSupervisor(Supervisor):
         self.eval_power = eval_power
         self.eval_coherence = eval_coherence
 
-    def aggregator(self, packages: Iterator[TimeSeriesPackage], drop_timeout_series: bool = True
+    def aggregator(self, packages: Iterator[TimeSeriesPackage]
                    ) -> Generator[AggYieldType, Any, Any]:
         """Aggregate series with equal parameters from packages.
          Quadratures are accumulated to form 2-d arrays.
@@ -1082,12 +1088,6 @@ class ActiveSupervisor(Supervisor):
         for package in packages:
             # Check timeout
             if timeout_coroutine.send(package):
-                if not drop_timeout_series:
-                    # Yield already accumulated quadratures
-                    for params, (acc_marks, acc_quads) in buffer:
-                        time_marks, quadratures = to_arrays(acc_marks, acc_quads)
-                        yield params, time_marks, quadratures
-
                 # Reset buffer
                 buffer = new_buffer()
 
