@@ -169,14 +169,14 @@ def timeout_filter(timeout, invalid_time_mark_policy: str = 'yield_timeout'
         package = yield is_timeout
 
         if prev_time_mark is None:
-            time_diff = dt.timedelta(0)
+            time_diff = dt.timedelta(microseconds=1)
         else:
             time_diff = package.time_mark - prev_time_mark
 
         if time_diff > timeout:
             is_timeout = True
 
-        elif time_diff < dt.timedelta(0):
+        elif time_diff <= dt.timedelta(0):
             # Known issues
             test_time_mark = package.time_mark.replace(second=0, microsecond=0)
             if test_time_mark == dt.datetime(2015, 6, 5, 1, 36):

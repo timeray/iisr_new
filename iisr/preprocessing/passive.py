@@ -638,7 +638,8 @@ class PassiveSupervisor(Supervisor):
                     acc_marks.append(series.time_mark)
                     acc_quads.append(series.quadratures)
 
-                    if len(acc_marks) != self.n_batch_samples
+                    if len(acc_marks) != self.n_batch_samples:
+                        pass
 
     def aggregator_(self, packages: Iterator[TimeSeriesPackage], drop_timeout_series: bool = True
                     ) -> Generator[AggYieldType, Any, Any]:
