@@ -29,6 +29,14 @@ def _merge_stdfiles(file1: StdFile, file2: StdFile) -> StdFile:
 
 class LaunchConfig(metaclass=ABCMeta):
     paths = NotImplemented
+    valid_output_formats = NotImplemented
+
+    def _check_output_formats(self, output_formats: List[str]):
+        output_formats = [fmt.lower() for fmt in output_formats]
+        for ofmt in output_formats:
+            if ofmt not in self.valid_output_formats:
+                raise ValueError('Incorrect output format: {}'.format(ofmt))
+        return output_formats
 
     @abstractmethod
     def series_filter(self) -> iisr_io.SeriesSelector:
@@ -81,12 +89,14 @@ class LaunchConfig(metaclass=ABCMeta):
 
 
 class IncoherentConfig(LaunchConfig):
+    valid_output_formats = ['std', 'txt']
+
     def __init__(self, paths: List[Path], output_formats: List[str],
                  n_accumulation: int, channels: List[Channel],
                  frequencies: List[Frequency] = None, pulse_lengths: List[TimeUnit] = None,
                  accumulation_timeout: Union[int, dt.timedelta] = 60, n_fft: int = None,
                  n_spectra: int = None,
-                 output_dir_prefix: str = '', clutter_estimate_window: int = None,
+                 output_dir_suffix: str = '', clutter_estimate_window: int = None,
                  clutter_drift_compensation: bool = False):
         """
         Create launch configuration. Check if input arguments are valid.
@@ -126,19 +136,11 @@ class IncoherentConfig(LaunchConfig):
         self.n_fft = self._check_positive_int(n_fft)
         self.n_spectra = self._check_positive_int(n_spectra)
 
-        assert isinstance(output_dir_prefix, str)
-        self.output_dir_suffix = output_dir_prefix
+        assert isinstance(output_dir_suffix, str)
+        self.output_dir_suffix = output_dir_suffix
         self.clutter_estimate_window = self._check_positive_int(clutter_estimate_window)
         assert isinstance(clutter_drift_compensation, bool)
         self.clutter_drift_compensation = clutter_drift_compensation
-
-    @staticmethod
-    def _check_output_formats(output_formats: List[str]):
-        output_formats = [fmt.lower() for fmt in output_formats]
-        for ofmt in output_formats:
-            if ofmt not in ['std', 'txt']:
-                raise ValueError('Incorrect output format: {}'.format(ofmt))
-        return output_formats
 
     @staticmethod
     def _check_pulse_length(pulse_lengths):
@@ -180,11 +182,15 @@ class IncoherentConfig(LaunchConfig):
 
 
 class PassiveConfig(LaunchConfig):
-    def __init__(self, paths: List[Path], output_dir_suffix: str, n_accumulation: int,
+    valid_output_formats = ['pkl']
+
+    def __init__(self, paths: List[Path], output_formats: List[str],
+                 output_dir_suffix: str, n_accumulation: int,
                  n_fft: int, channels: List[Channel], frequencies: List[Frequency] = None,
                  accumulation_timeout: Union[int, dt.timedelta] = dt.timedelta(minutes=60)):
         self.paths = self._check_paths(paths)
 
+        self.output_formats = self._check_output_formats(output_formats)
         assert isinstance(output_dir_suffix, str)
         self.output_dir_suffix = output_dir_suffix
         self.n_accumulation = self._check_positive_int(n_accumulation)
@@ -301,9 +307,10 @@ def run_processing(config: LaunchConfig):
     # Gather results from handlers and save them
     manager = DataManager()
     for out_fmt in config.output_formats:
-        if out_fmt == 'txt':
+        if out_fmt in ['txt', 'pkl']:
             for result in results:
-                manager.save_preprocessing_result(result, save_dir_suffix=config.output_dir_suffix)
+                manager.save_preprocessing_result(result, save_dir_suffix=config.output_dir_suffix,
+                                                  save_format=out_fmt)
         elif out_fmt == 'std':
             _merge_and_save_stdfiles(results, manager)
         else:

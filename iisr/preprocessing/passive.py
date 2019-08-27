@@ -1,16 +1,17 @@
 import datetime as dt
+import pickle as pkl
 from collections import defaultdict, namedtuple
 from enum import Enum
 
 import numpy as np
-from typing import List, TextIO, Dict, IO, Iterator, Tuple, Generator, Any, BinaryIO
+from typing import List, TextIO, Dict, IO, Iterator, Tuple, Generator, Any, BinaryIO, Optional
 
-from iisr.iisr_io import FileInfo, TimeSeriesPackage, TimeSeries
+from iisr.iisr_io import FileInfo, TimeSeriesPackage
 from iisr.preprocessing.representation import HandlerResult, Handler, HandlerParameters, \
     Supervisor, timeout_filter, HandlerBatch
 from iisr.representation import Channel
-from iisr.units import Frequency, TimeUnit
-from iisr.utils import central_time
+from iisr.units import Frequency
+from iisr.utils import central_time, uneven_mean
 
 
 class PassiveMode(Enum):
@@ -59,6 +60,7 @@ def calc_ref_band(n_fft: int, sampling_frequency: Frequency) -> Frequency:
 
 
 class PassiveParameters(HandlerParameters):
+    mode = NotImplemented
     sampling_frequency = NotImplemented
     n_accumulation = NotImplemented
     n_fft = NotImplemented
@@ -78,6 +80,7 @@ class PassiveScanParameters(PassiveParameters):
     def __init__(self, sampling_frequency: Frequency, n_accumulation: int,
                  n_fft: int, central_frequencies: Tuple[Frequency], channels: List[Channel],
                  band_type: str):
+        self.mode = PassiveMode.scan
         self.sampling_frequency = sampling_frequency
         self.n_accumulation = n_accumulation
         self.n_fft = n_fft
@@ -87,11 +90,12 @@ class PassiveScanParameters(PassiveParameters):
 
 
 class PassiveTrackParameters(PassiveParameters):
-    params_to_save = ['sampling_frequency', 'n_accumulation', 'n_fft', 'channels',
+    params_to_save = ['mode', 'sampling_frequency', 'n_accumulation', 'n_fft', 'channels',
                       'band_type']
 
-    def __init__(self, sampling_frequency: Frequency, n_accumulation: int,
+    def __init__(self, mode: PassiveMode, sampling_frequency: Frequency, n_accumulation: int,
                  n_fft: int, channels: List[Channel], band_type: str):
+        self.mode = mode
         self.sampling_frequency = sampling_frequency
         self.n_accumulation = n_accumulation
         self.n_fft = n_fft
@@ -100,12 +104,14 @@ class PassiveTrackParameters(PassiveParameters):
 
 
 class PassiveResult(HandlerResult):
+    mode_name = 'passive'
+
     def __init__(self, parameters: PassiveParameters):
         self.parameters = parameters
 
     @property
     def short_name(self):
-        return '{}'.format(self.parameters.band_type)
+        return '{}_{}'.format(self.parameters.mode.name, self.parameters.band_type)
 
     def save_txt(self, file: IO, save_date: dt.date = None):
         raise NotImplementedError
@@ -124,8 +130,6 @@ class PassiveResult(HandlerResult):
 
 
 class PassiveScanResult(PassiveResult):
-    mode_name = 'passive_scan'
-
     def __init__(self, parameters: PassiveScanParameters, time_marks: np.ndarray,
                  frequencies: Frequency, spectra: Dict[Channel, np.ndarray],
                  coherence: np.ndarray = None):
@@ -160,8 +164,6 @@ class PassiveScanResult(PassiveResult):
 
 
 class PassiveTrackResult(PassiveResult):
-    mode_name = 'passive_track'
-
     def __init__(self, parameters: PassiveTrackParameters,
                  time_marks: np.ndarray, central_frequencies: Frequency,
                  spectra: Dict[Channel, np.ndarray], coherence: np.ndarray = None):
@@ -170,7 +172,7 @@ class PassiveTrackResult(PassiveResult):
                              'time mark')
 
         if spectra is not None:
-            if sorted(spectra.keys()) != parameters.channels:
+            if sorted(spectra.keys()) != list(parameters.channels):
                 raise AssertionError('Channels in spectra dictionary must be identical '
                                      'to channels_set in parameters object')
 
@@ -191,6 +193,7 @@ class PassiveTrackResult(PassiveResult):
         self.central_frequencies = central_frequencies
         self.spectra = spectra
         self.coherence = coherence
+        self.dates = sorted(set((dt.date(tm.year, tm.month, tm.day) for tm in self.time_marks)))
 
     @property
     def frequencies(self):
@@ -208,11 +211,12 @@ class PassiveTrackResult(PassiveResult):
         return self._frequencies
 
     def save_pickle(self, file: BinaryIO, save_date: dt.date = None):
-        pass
+        pkl.dump(self, file)
 
     @classmethod
-    def load_pickle(cls, file: List[BinaryIO]) -> 'HandlerResult':
-        pass
+    def load_pickle(cls, file: List[BinaryIO]) -> 'PassiveTrackResult':
+        assert len(file) == 1
+        return pkl.load(file[0])
 
 
 class PassiveBatch(HandlerBatch):
@@ -264,18 +268,18 @@ class PassiveHandler(Handler):
     def n_avg(self):
         return self.parameters.n_accumulation
 
-    def calc_power_spectra(self, fft: np.ndarray) -> np.ndarray:
+    def calc_power_spectra(self, normalized_time: np.ndarray, fft: np.ndarray) -> np.ndarray:
         power_spectra = np.abs(fft)  # new array
         np.power(power_spectra, 2, out=power_spectra)
 
-        power_spectra = np.mean(power_spectra.real, axis=0)
+        power_spectra = uneven_mean(normalized_time, power_spectra.real, axis=0)
         # spectra_std = np.std(power_spectra.real, axis=0)
 
         power_spectra /= self.n_fft ** 2
         # spectra_std /= self.n_fft ** 2
         return power_spectra
 
-    def calc_spectral_coherence(self, fft: Dict[Channel, np.ndarray],
+    def calc_spectral_coherence(self, normalized_time: np.ndarray, fft: Dict[Channel, np.ndarray],
                                 power_spectra: Dict[Channel, np.ndarray]) -> np.ndarray:
         scale = self.n_fft ** 2
 
@@ -286,7 +290,7 @@ class PassiveHandler(Handler):
         power_spectra2 = power_spectra[self.channels[1]] * scale
 
         cross_spectra = fft1 * fft2.conj()
-        cross_spectra_mean = cross_spectra.mean(axis=0)
+        cross_spectra_mean = uneven_mean(normalized_time, cross_spectra, axis=0)
 
         return cross_spectra_mean / np.sqrt(power_spectra1 * power_spectra2)
 
@@ -407,7 +411,7 @@ class PassiveTrackHandler(PassiveHandler):
         super().__init__(parameters, eval_coherence=eval_coherence)
         self.central_frequencies_hz = []
 
-    def _assert_correct_batch(self, batch: PassiveScanBatch):
+    def _assert_correct_batch(self, batch: PassiveTrackBatch):
         time_marks = batch.time_marks
         pars = batch.batch_params
         quadratures = batch.quadratures
@@ -419,31 +423,32 @@ class PassiveTrackHandler(PassiveHandler):
             raise ValueError(f'Invalid channels from scan batch: {input_channels}')
 
         for channel_quads in quadratures.values():
-            for q_arr in channel_quads:
-                if q_arr.shape != (len(time_marks), self.n_fft):
-                    raise ValueError('Incorrect shape of quadratures arrays')
+            if channel_quads.shape != (len(time_marks), self.n_fft):
+                raise ValueError('Incorrect shape of quadratures arrays')
 
-    def handle(self, batch: PassiveScanBatch):
+    def handle(self, batch: PassiveTrackBatch):
         self._assert_correct_batch(batch)
 
         self.time_marks.append(central_time(batch.time_marks))
+        timestamps = np.array([tm.timestamp() for tm in batch.time_marks])
+        normalized_timestamps = (timestamps - timestamps.min()) / timestamps.ptp()
 
         central_frequency = batch.batch_params['central_frequency']
         self.central_frequencies_hz.append(central_frequency['Hz'])
 
         # Calculate fft and power spectra
-        channels_fft = defaultdict(list)  # cache for coherence
+        channels_fft = {}  # cache for coherence
         for ch, quads in batch.quadratures.items():
             fft = self.calc_fft(quads, axis=1)
             fft = np.fft.fftshift(fft)
-            channels_fft[ch].append(fft)
-            self.spectra[ch].append(self.calc_power_spectra(fft))
+            channels_fft[ch] = fft
+            self.spectra[ch].append(self.calc_power_spectra(normalized_timestamps, fft))
 
         # Coherence
         if self.eval_coherence:
-            cfreq_fft = {ch: fft for ch, fft in channels_fft.items()}
-            cfreq_power_spectra = {ch: pwr_sp for ch, pwr_sp in self.spectra.items()}
-            coherence = self.calc_spectral_coherence(cfreq_fft, cfreq_power_spectra)
+            cfreq_power_spectra = {ch: pwr_sp[-1] for ch, pwr_sp in self.spectra.items()}
+            coherence = self.calc_spectral_coherence(normalized_timestamps, channels_fft,
+                                                     cfreq_power_spectra)
             self.coherence.append(coherence)
 
     def finish(self):
@@ -464,8 +469,8 @@ class PassiveTrackHandler(PassiveHandler):
 
 class PassiveSupervisor(Supervisor):
     """Supervisor that manages passive processing"""
-    UniqueParams = namedtuple('UniqueParams', ['mode', 'band_type'])
-    AggYieldType = Tuple[UniqueParams, PassiveBatch]
+    UniqueParams = namedtuple('UniqueParams', ['mode'])
+    AggYieldType = Tuple[PassiveParameters, PassiveBatch]
 
     def __init__(self, n_accumulation: int, n_fft: int, timeout: dt.timedelta,
                  eval_spectra: bool = True, eval_coherence: bool = True):
@@ -478,107 +483,57 @@ class PassiveSupervisor(Supervisor):
         self.eval_spectra = eval_spectra
         self.eval_coherence = eval_coherence
 
-    def groupby_band(self, packages: Iterator[TimeSeriesPackage]):
-        timeout_coroutine = timeout_filter(self.timeout)
-        next(timeout_coroutine)  # Init coroutine
+        self._current_mode = None
+        self._track_mode_current_frequency = None
+        self._buffer = None
 
-        prev_mode = None
-        prev_date = None
+    def track_mode_aggregate(self, package: TimeSeriesPackage) -> Optional[AggYieldType]:
+        # Check package correctness
+        assert len(package.time_series_list) == 2, "Expect signals from 2 channels"
+        expected_band = 'wide'
+        assert package.time_series_list[0].parameters.band_type == expected_band,\
+            f'Expect {expected_band} band'
 
-        acc_series = defaultdict(lambda: defaultdict(list))
+        frequency = package.time_series_list[0].parameters.frequency
+        channels = [package.time_series_list[0].parameters.channel,
+                    package.time_series_list[1].parameters.channel]
 
-        for package in packages:
-            sample_series = package.time_series_list[0]
-            frequency = sample_series.parameters.frequency
-            mode = get_passive_mode(sample_series.parameters.file_info)
-            n_samples = sample_series.parameters.n_samples
+        if self._buffer is None or frequency != self._track_mode_current_frequency:
+            # Tuple of time array and channel dict for quadratures arrays
+            self._buffer = [], {ch: [] for ch in channels}
+            self._track_mode_current_frequency = frequency
 
-            # Check, if necessary number of samples can be formed by stacking quadratures in series
-            if self.n_batch_samples % n_samples != 0:
-                raise ValueError('n_accumulated_samples = (n_accumulation x n_fft)'
-                                 ' should be divisible by the number of samples in series '
-                                 '(n_accumulated_samples = {}, n_samples = {})'
-                                 ''.format(self.n_batch_samples, n_samples))
-            else:
-                max_acc_series = self.n_batch_samples // n_samples
+        quads1 = package.time_series_list[0].quadratures.reshape(-1, self.n_fft)
+        quads2 = package.time_series_list[1].quadratures.reshape(-1, self.n_fft)
 
-            band_types = defaultdict(list)
-            for series in package:
-                assert series.parameters.frequency == frequency
-                assert get_passive_mode(series.parameters.file_info) == mode
+        sampling_frequency = package.time_series_list[0].parameters.sampling_frequency
+        delta_t_us = 1 / sampling_frequency['MHz']
+        acc_marks = self._buffer[0]
 
-                # Check timeout
-                if timeout_coroutine.send(package):
-                    acc_series = {}
-                    continue
-
-                # Check if mode has changed
-                if prev_mode is not None and prev_mode != mode:
-                    acc_series = {}
-                    continue
-                prev_mode = mode
-
-                # Check if date has changed
-                date = package.time_mark.date()
-                if prev_date is not None and prev_date != date:
-                    acc_series = {}
-                    continue
-                prev_date = date
-
-                band_types[series.parameters.channel.band_type].append(series)
-
-            for band_type, series_list in band_types.items():
-                series_dict = acc_series[(band_type, frequency)]
-
-                current_length = None
-                for series in series_list:
-                    channel = series.parameters.channel
-                    series_dict[channel].append(series)
-                    current_length = len(series_dict[channel])
-
-                if current_length is None:
-                    raise AssertionError('Series list is empty')
-
-                if current_length == max_acc_series:
-                    for ch in series_dict:
-                        assert current_length == len(series_dict[ch])
-
-                    del acc_series[(band_type, frequency)]
-                    yield (band_type, frequency), series_dict
-
-    def _get_passive_params(self, mode, date, sampling_frequency, channels, central_frequencies,
-                            band_type):
-        if mode is PassiveMode.scan:
-            batch_params = {}
-            passive_params = PassiveScanParameters(sampling_frequency=sampling_frequency,
-                                                   n_accumulation=self.n_accumulation,
-                                                   n_fft=self.n_fft,
-                                                   central_frequencies=central_frequencies,
-                                                   channels=channels,
-                                                   band_type=band_type)
-        elif mode in PassiveMode:
-            assert len(central_frequencies) == 1
-            batch_params = {'central_frequency': central_frequencies[0]}
-            passive_params = PassiveTrackParameters(sampling_frequency=sampling_frequency,
-                                                    n_accumulation=self.n_accumulation,
-                                                    n_fft=self.n_fft,
-                                                    channels=channels,
-                                                    band_type=band_type)
-        else:
-            raise AssertionError('Incorrect mode')
-
-        return batch_params, passive_params
-
-    def _get_fft_split_count(self, series_length):
-        # Check, if necessary number of samples can be formed by stacking quadratures in series
-        if self.n_batch_samples % series_length == 0:
-            return self.n_batch_samples // series_length
-        else:
-            raise ValueError(
-                f'n_batch_samples = (n_accumulation x n_fft) should be divisible '
-                f'by the number of samples in series '
-                f'(n_batch_samples = {self.n_batch_samples}, series_length = {series_length})'
+        result = None
+        for series_split_num in range(len(quads1)):
+            microseconds_shift = dt.timedelta(
+                microseconds=series_split_num * self.n_fft * delta_t_us
             )
+            acc_marks.append(package.time_mark + microseconds_shift)
+
+            for ch_num, quad in enumerate([quads1, quads2]):
+                self._buffer[1][channels[ch_num]].append(quad[series_split_num])
+
+            if len(acc_marks) == self.n_accumulation:
+                mode = get_passive_mode(package.time_series_list[0].parameters.file_info)
+                batch_params = {'central_frequency': self._track_mode_current_frequency}
+                passive_params = PassiveTrackParameters(mode=mode,
+                                                        sampling_frequency=sampling_frequency,
+                                                        n_accumulation=self.n_accumulation,
+                                                        n_fft=self.n_fft,
+                                                        channels=channels,
+                                                        band_type=expected_band)
+                time_marks = np.array(acc_marks, dtype=dt.datetime)
+                quadratures = {ch: np.stack(self._buffer[1][ch])for ch in channels}
+                result = passive_params, PassiveBatch(time_marks, batch_params, quadratures)
+                self._buffer = None
+        return result
 
     def aggregator(self, packages: Iterator[TimeSeriesPackage]
                    ) -> Generator[AggYieldType, Any, Any]:
@@ -592,125 +547,25 @@ class PassiveSupervisor(Supervisor):
         Returns:
 
         """
-        UniqueParams = self.UniqueParams
-
-        def new_buffer() -> Dict[UniqueParams, Dict[Channel, Tuple]]:
-            return defaultdict(lambda: defaultdict(lambda: ([], [])))
-
         timeout_coroutine = timeout_filter(self.timeout)
         next(timeout_coroutine)  # Init coroutine
 
-        buffer = new_buffer()
-        track_curr_frequency = None
-        curr_mode = None
         for package in packages:
             # Get passive mode from first series of the package
             sample_series = package.time_series_list[0]
             mode = get_passive_mode(sample_series.parameters.file_info)
-            frequency = sample_series.parameters.frequency
-            n_samples = sample_series.parameters.n_samples
 
             # Reset if timeout or mode has changed
-            if timeout_coroutine.send(package) or curr_mode != mode:
-                buffer = new_buffer()
-                curr_mode = mode
+            if timeout_coroutine.send(package) or self._current_mode != mode:
+                self._buffer = None
+                self._current_mode = mode
 
-            for series in package.time_series_list:
-                channel = series.parameters.channel
-                band_type = series.parameters.band_type
-
-                unique_params = UniqueParams(mode, band_type)
-
-                if mode == PassiveMode.scan:
-                    pass
-                else:
-                    # Track mode
-                    if frequency != track_curr_frequency:
-                        # Reset buffer
-                        buffer = new_buffer()
-                        track_curr_frequency = frequency
-
-                    band_buf = buffer[unique_params]
-
-                    acc_marks, acc_quads = band_buf[channel]
-
-                    # Append new record
-                    acc_marks.append(series.time_mark)
-                    acc_quads.append(series.quadratures)
-
-                    if len(acc_marks) != self.n_batch_samples:
-                        pass
-
-    def aggregator_(self, packages: Iterator[TimeSeriesPackage], drop_timeout_series: bool = True
-                    ) -> Generator[AggYieldType, Any, Any]:
-        """Aggregate series from packages into arrays, grouping them by parameters.
-
-        This function contain complicated logic to iterate over series.
-        Since parameters of incoming series are unknown, grouping logic should be formulated on fly.
-
-        Quadratures in passive mode grouped by observation frequencies and channel bands.
-
-        Args:
-            packages:
-            drop_timeout_series:
-
-        Returns:
-
-        """
-        start_params = None
-        band_dict = defaultdict(list)
-        central_frequencies_dict = defaultdict(list)
-        for (band_type, frequency), series_dict in self.groupby_band(packages):
-            # If full frequency cycle was passed, yield
-            if start_params == (band_type, frequency):
-                central_frequencies = central_frequencies_dict[band_type]
-
-                # n_central_frequencies accumulated series:
-                acc_series = band_dict[band_type]  # type: List[Dict[Channel, List[TimeSeries]]]
-
-                # Channels are identical for each dictionary in the list
-                channels = list(acc_series[0].keys())  # type: List[Channel]
-
-                # Sampling frequency, date and mode are also identical
-                sample_series = acc_series[0][channels[0]][0]  # type: TimeSeries
-                mode = get_passive_mode(sample_series.parameters.file_info)
-                sampling_frequency = sample_series.parameters.sampling_frequency
-                date = sample_series.time_mark.date()
-
-                # Now, for each central frequency, append accumulated time marks to a list
-                # Quadratures should be appended to each channel
-                time_marks = []
-                quadratures = {ch: [] for ch in channels}
-                for freq_num in range(len(central_frequencies)):
-                    single_freq_acc_series_dict = acc_series[freq_num]
-
-                    # Time marks are identical for each channel. It is guarantied by previous logic.
-                    # Oversample time marks (we cut series n_samples by n_fft)
-                    n_samples = single_freq_acc_series_dict[channels[0]][0].parameters.n_samples
-                    n_oversample = n_samples // self.n_fft
-                    acc_time_marks = []
-                    for series in single_freq_acc_series_dict[channels[0]]:
-                        acc_time_marks.extend([series.time_mark] * n_oversample)
-                    time_marks.append(np.array(acc_time_marks, dtype=dt.datetime))
-
-                    for ch in channels:
-                        # n_acc x n_samples
-                        acc_quadratures = [series.quadratures for series
-                                           in single_freq_acc_series_dict[ch]]
-                        new_shape = self.n_accumulation, -1
-                        quadratures[ch].append(np.stack(acc_quadratures).reshape(new_shape))
-
-                # Get parameters
-                batch_params, passive_params = self._get_passive_params(
-                    mode, date, sampling_frequency, channels, central_frequencies, band_type
-                )
-                yield passive_params, PassiveBatch(time_marks, batch_params, quadratures)
-
-            if start_params is None:
-                start_params = band_type, frequency
-
-            band_dict[band_type].append(series_dict)
-            central_frequencies_dict[band_type].append(frequency)
+            if self._current_mode == PassiveMode.scan:
+                pass
+            else:
+                result = self.track_mode_aggregate(package)
+                if result is not None:
+                    yield result
 
     def init_handler(self, parameters: PassiveParameters):
         if isinstance(parameters, PassiveScanParameters):

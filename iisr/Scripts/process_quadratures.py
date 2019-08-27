@@ -111,7 +111,7 @@ def main(argv=None):
     # Instantiate LaunchConfig subclass and pass it to processing
     cfg_mode = config[mode]
     paths = _parse_path(cfg_mode['paths'])
-    output_dir_prefix = cfg_mode['output_folder_suffix']
+    output_dir_suffix = cfg_mode['output_folder_suffix']
     n_accumulation = int(cfg_mode['n_accumulation'])
     channels = _parse_channels(cfg_mode['channels'])
     frequencies = _parse_frequency(cfg_mode['frequencies'])
@@ -122,7 +122,7 @@ def main(argv=None):
         launch_config = IncoherentConfig(
             paths=paths,
             output_formats=_parse_list(cfg_mode['output_formats']),
-            output_dir_prefix=output_dir_prefix,
+            output_dir_suffix=output_dir_suffix,
             n_accumulation=n_accumulation,
             channels=channels,
             frequencies=frequencies,
@@ -138,7 +138,8 @@ def main(argv=None):
     elif mode == 'passive':
         launch_config = PassiveConfig(
             paths=paths,
-            output_dir_suffix=output_dir_prefix,
+            output_formats=_parse_list(cfg_mode['output_formats']),
+            output_dir_suffix=output_dir_suffix,
             n_accumulation=n_accumulation,
             n_fft=n_fft,
             channels=channels,

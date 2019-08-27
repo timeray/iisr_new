@@ -55,19 +55,10 @@ class DataManager:
 
         stdfile.to_file(dirpath / filename)
 
-    def save_preprocessing_result(self, result, save_dir_suffix=''):
-        """
-        Save first stage processing results.
+    def save_preprocessing_result(self, result, save_dir_suffix='', save_format='txt'):
+        """Save first stage processing results."""
+        assert save_format in ['txt', 'pkl']
 
-        Parameters
-        ----------
-        result: FirstStageResults
-
-        Returns
-        -------
-        id: ID
-            Unique identifier of results.
-        """
         self._check_main_folder()
 
         name = result.short_name
@@ -85,8 +76,12 @@ class DataManager:
             if not dirpath.exists():
                 dirpath.mkdir(parents=True)
 
-            with open(str(dirpath / filename), 'w') as file:  # type: IO
-                result.save_txt(file, save_date=result_date)
+            if save_format == 'txt':
+                with open(str(dirpath / filename), 'w') as file:  # type: IO
+                    result.save_txt(file, save_date=result_date)
+            else:
+                with open(str(dirpath / filename), 'wb') as file:
+                    result.save_pickle(file, save_date=result_date)
 
     def save_postprocessing_results(self, results):
         """

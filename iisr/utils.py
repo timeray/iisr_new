@@ -5,10 +5,34 @@ from collections import defaultdict
 from datetime import datetime
 
 import numpy as np
-from typing import Sequence, List, Callable
+from typing import Sequence, List, Callable, Union
+from scipy.integrate import trapz, simps
 
 DATE_FMT = '%Y-%m-%d'
 TIME_FMT = '%H:%M:%S'
+
+
+def uneven_mean(x: np.ndarray, y: np.ndarray, axis: int = -1, method: str = 'trapz'
+                ) -> Union[np.ndarray, np.float]:
+    """Compute mean of function with uneven sampling.
+
+    Args:
+        x: Sampling values.
+        y: Function values.
+        axis: Axis of averaging.
+        method: Method 'trapz' or 'simps' for trapezoid and Simpson rules. 'trapz' performs faster
+                but is less accurate.
+
+    Returns:
+        mean: Mean.
+
+    """
+    if method == 'trapz':
+        return trapz(y, x, axis=axis)
+    elif method == 'simps':
+        return simps(y, x, axis=axis)
+    else:
+        raise ValueError(f'Unknown method: {method}')
 
 
 def central_time(dtimes: Sequence[datetime]) -> datetime:
