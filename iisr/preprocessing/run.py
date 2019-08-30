@@ -6,25 +6,14 @@ import time
 import datetime as dt
 from pathlib import Path
 from abc import ABCMeta, abstractmethod
-from typing import List, Union, Dict
+from typing import List, Union
 
 from iisr import iisr_io
 from iisr.data_manager import DataManager
-from iisr.preprocessing.active import ActiveSupervisor, ActiveResult
+from iisr.preprocessing.active import ActiveSupervisor
 from iisr.preprocessing.passive import PassiveSupervisor
 from iisr.representation import Channel
 from iisr.units import Frequency, TimeUnit
-from iisr.utils import merge, infinite_defaultdict
-from iisr import StdFile, AnnotatedData
-
-
-def _merge_stdfiles(file1: StdFile, file2: StdFile) -> StdFile:
-    def key_fn(data: AnnotatedData):
-        return data.header.start_time
-
-    new_power = merge(file1.power, file2.power, key=key_fn)
-    new_spectra = merge(file1.spectra, file2.spectra, key=key_fn)
-    return StdFile(new_power, new_spectra)
 
 
 class LaunchConfig(metaclass=ABCMeta):
@@ -222,51 +211,6 @@ class PassiveConfig(LaunchConfig):
         return '\n'.join(msg)
 
 
-def _merge_and_save_stdfiles(results, manager):
-    assert all(results[0].dates == res.dates for res in results)
-    dates = results[0].dates
-    for date in dates:
-        grouped_files = infinite_defaultdict()
-        for result in results:  # type: ActiveResult
-            stdfiles = result.to_std(date)
-            for ch, stdfile in stdfiles.items():
-                horn = ch.horn
-                pulse_type = ch.pulse_type
-                stdfile = stdfiles[ch]
-                freq = stdfile.power[0].header.frequency_hz / 1e6
-                pulse_len = stdfile.power[0].header.pulse_length_us
-
-                if pulse_type == 'short':
-                    if pulse_len == 0:
-                        # Noise channel, ignore
-                        continue
-
-                    # Shift grouping frequency to long channel equivalent
-                    freq -= 0.3
-
-                grouped_files[horn, freq][pulse_type][pulse_len] = stdfile
-
-        for (horn, freq), files in grouped_files.items():
-            files: Dict[str, Dict[int, StdFile]]
-            if len(files) != 2:
-                raise ValueError('Expect short and long pulses to be present in files')
-
-            if len(files['short']) != 1:
-                raise ValueError('Expect single short pulse')
-
-            short_stdfile = list(files['short'].values())[0]
-
-            if len(files['long']) > 2:
-                raise ValueError('Expect at most 2 long pulses (700 and 900)')
-
-            for pulse_len, long_stdfile in files['long'].items():
-                stdfile = _merge_stdfiles(short_stdfile, long_stdfile)
-
-                filename = '{}_{}_f{:.2f}_len{}.std' \
-                           ''.format(date.strftime('%Y%m%d'), horn, freq, int(pulse_len))
-                manager.save_stdfile(stdfile, filename)
-
-
 def run_processing(config: LaunchConfig):
     """
     Launch processing given configuration.
@@ -298,22 +242,14 @@ def run_processing(config: LaunchConfig):
     else:
         raise RuntimeError('Unknown config type')
 
+    manager = DataManager()
     # Process series
     with iisr_io.read_files_by('blocks',
                                paths=config.paths,
                                series_selector=config.series_filter()) as generator:
-        results = supervisor.process_packages(generator)
-
-    # Gather results from handlers and save them
-    manager = DataManager()
-    for out_fmt in config.output_formats:
-        if out_fmt in ['txt', 'pkl']:
-            for result in results:
-                manager.save_preprocessing_result(result, save_dir_suffix=config.output_dir_suffix,
-                                                  save_format=out_fmt)
-        elif out_fmt == 'std':
-            _merge_and_save_stdfiles(results, manager)
-        else:
-            logging.warning('Unexpected format from config: {}'.format(out_fmt))
+        results = supervisor.process_packages(generator,
+                                              data_manager=manager,
+                                              output_formats=config.output_formats,
+                                              subfolders=[config.output_dir_suffix])
 
     logging.info('Processing successful. Elapsed time: {:.0f} s'.format(time.time() - start_time))

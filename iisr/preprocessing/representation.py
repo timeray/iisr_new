@@ -6,10 +6,68 @@ import datetime as dt
 
 import numpy as np
 from scipy import fftpack
-from typing import IO, List, TextIO, Union, Generator, Any, Iterator, Tuple, BinaryIO
+from typing import IO, List, TextIO, Union, Generator, Any, Iterator, Tuple, BinaryIO, Dict
 
+from iisr.data_manager import DataManager
 from iisr.iisr_io import TimeSeriesPackage
 from iisr.representation import ReprJSONEncoder, ReprJSONDecoder
+
+from iisr.utils import merge, infinite_defaultdict
+from iisr import StdFile, AnnotatedData
+
+
+def _merge_stdfiles(file1: StdFile, file2: StdFile) -> StdFile:
+    def key_fn(data: AnnotatedData):
+        return data.header.start_time
+
+    new_power = merge(file1.power, file2.power, key=key_fn)
+    new_spectra = merge(file1.spectra, file2.spectra, key=key_fn)
+    return StdFile(new_power, new_spectra)
+
+
+def _merge_and_save_stdfiles(results, manager):
+    assert all(results[0].dates == res.dates for res in results)
+    dates = results[0].dates
+    for date in dates:
+        grouped_files = infinite_defaultdict()
+        for result in results:
+            stdfiles = result.to_std(date)
+            for ch, stdfile in stdfiles.items():
+                horn = ch.horn
+                pulse_type = ch.pulse_type
+                stdfile = stdfiles[ch]
+                freq = stdfile.power[0].header.frequency_hz / 1e6
+                pulse_len = stdfile.power[0].header.pulse_length_us
+
+                if pulse_type == 'short':
+                    if pulse_len == 0:
+                        # Noise channel, ignore
+                        continue
+
+                    # Shift grouping frequency to long channel equivalent
+                    freq -= 0.3
+
+                grouped_files[horn, freq][pulse_type][pulse_len] = stdfile
+
+        for (horn, freq), files in grouped_files.items():
+            files: Dict[str, Dict[int, StdFile]]
+            if len(files) != 2:
+                raise ValueError('Expect short and long pulses to be present in files')
+
+            if len(files['short']) != 1:
+                raise ValueError('Expect single short pulse')
+
+            short_stdfile = list(files['short'].values())[0]
+
+            if len(files['long']) > 2:
+                raise ValueError('Expect at most 2 long pulses (700 and 900)')
+
+            for pulse_len, long_stdfile in files['long'].items():
+                stdfile = _merge_stdfiles(short_stdfile, long_stdfile)
+
+                filename = '{}_{}_f{:.2f}_len{}.std' \
+                           ''.format(date.strftime('%Y%m%d'), horn, freq, int(pulse_len))
+                manager.save_stdfile(stdfile, filename)
 
 
 class HandlerResult(metaclass=ABCMeta):
@@ -22,7 +80,7 @@ class HandlerResult(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def save_txt(self, file: IO, save_date: dt.date = None):
+    def save_txt(self, data_manager: DataManager):
         """Save results to file. If save_date is passed, save specific date."""
 
     @classmethod
@@ -31,7 +89,7 @@ class HandlerResult(metaclass=ABCMeta):
         """Load results from list of files."""
 
     @abstractmethod
-    def save_pickle(self, file: BinaryIO, save_date: dt.date = None):
+    def save_pickle(self, data_manager: DataManager):
         """Pickle results to file."""
 
     @classmethod
@@ -46,17 +104,15 @@ class HandlerBatch(metaclass=ABCMeta):
 
 class Handler(metaclass=ABCMeta):
     """Parent class for various types of first-stage processing."""
+    results = NotImplemented
+
     @abstractmethod
     def handle(self, batch: HandlerBatch):
-        """Processing algorithm"""
+        """Processing algorithm that returns intermediate result"""
 
     @abstractmethod
-    def finish(self) -> HandlerResult:
-        """Returns results of processing and reset buffers.
-
-        Returns:
-            results: Processing results.
-        """
+    def finish(self):
+        """Finish processing and return the results"""
 
     @staticmethod
     def calc_power(q: np.ndarray, axis: int = 0) -> np.ndarray:
@@ -208,11 +264,16 @@ class Supervisor(metaclass=ABCMeta):
     def init_handler(self, *args, **kwargs) -> Handler:
         """Initialize new handler"""
 
-    def process_packages(self, packages: Iterator[TimeSeriesPackage]) -> List[HandlerResult]:
+    def process_packages(self, packages: Iterator[TimeSeriesPackage],
+                         data_manager: DataManager = None,
+                         output_formats: List[str] = None,
+                         subfolders: List[str] = None) -> List[HandlerResult]:
         """Process all packages from the generator to get list of results"""
         # Group series by parameters to n_acc, check for timeouts
 
         handlers = {}
+        save_results = output_formats is not None and output_formats
+        save_intermediate_txt = 'txt' in output_formats if save_results else None
         for key_params, batch in self.aggregator(packages):
             # If no there is no handler for given parameters, create it
             if key_params in handlers:
@@ -222,11 +283,22 @@ class Supervisor(metaclass=ABCMeta):
                 handlers[key_params] = handler
 
             # Process grouped series using handler
-            handler.handle(batch)
+            intermediate_result = handler.handle(batch)
+            if save_intermediate_txt:
+                intermediate_result.append_to_txt(data_manager, subfolders)
 
-        # Get results
         results = []
         for handler in handlers.values():
             results.append(handler.finish())
+
+        if save_results:
+            for out_fmt in output_formats:
+                if out_fmt == 'pkl':
+                    for result in results:
+                        result.save_pickle(data_manager, subfolders)
+                elif out_fmt == 'std':
+                    _merge_and_save_stdfiles(results, data_manager)
+                else:
+                    logging.warning('Unexpected format from config: {}'.format(out_fmt))
 
         return results

@@ -1,12 +1,13 @@
 """
 Manages output files and results of processing.
 """
-from typing import IO
+from typing import IO, List
 
 import os
 import sys
 from pathlib import Path
 import configparser
+import datetime as dt
 from iisr.utils import DATE_FMT
 from iisr import IISR_PATH, StdFile
 
@@ -41,6 +42,26 @@ class DataManager:
             self.main_folder.mkdir()
         elif not self.main_folder.is_dir():
             raise NotADirectoryError('{}'.format(self.main_folder))
+
+    def get_folder_path(self, date: dt.date = None, subfolders: List[str] = None) -> Path:
+        self._check_main_folder()
+        path = self.main_folder
+        if date is not None:
+            date_str = date.strftime(DATE_FMT)
+            path /= date_str
+
+        path /= self.PREPROCESSING_FOLDER_NAME
+
+        if subfolders:
+            for folder in subfolders:
+                path /= folder
+        if not path.exists():
+            path.mkdir(parents=True)
+        return path
+
+    def get_file_path(self, filename: str, date: dt.date = None, subfolders: List[str] = None
+                      ) -> Path:
+        return self.get_folder_path(date, subfolders) / filename
 
     def save_stdfile(self, stdfile: StdFile, filename: str, save_dir_suffix=''):
         self._check_main_folder()

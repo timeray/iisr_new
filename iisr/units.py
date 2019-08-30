@@ -2,6 +2,7 @@
 Classes for physical units.
 """
 import json
+from functools import total_ordering
 from typing import Union
 import numpy as np
 
@@ -17,6 +18,7 @@ def register_unit(cls):
     return cls
 
 
+@total_ordering
 class Unit:
     """
     Provide types to store physical values.
@@ -34,9 +36,8 @@ class Unit:
             value = float(value)
 
         if isinstance(value, np.ndarray):
-            value.dtype = np.float
-
             value = value.copy().squeeze()  # Copy for later in-place operations
+            value.dtype = np.float
             self.size = value.size
             self.shape = value.shape
         elif isinstance(value, (float, complex)):
@@ -89,8 +90,23 @@ class Unit:
             raise TypeError('Wrong type {} (expected {})'.format(
                 repr(other), self.__class__.__name__)
             )
+        if self.shape != ():
+            raise NotImplementedError('Comparision for arrays is ambiguous')
+
         ratio = self.available_units[self._unit] / other.available_units[other._unit]
         return self._value * ratio == other._value
+
+    def __le__(self, other: 'Unit'):
+        if self.__class__.__name__ != other.__class__.__name__:
+            raise TypeError('Wrong type {} (expected {})'.format(
+                repr(other), self.__class__.__name__)
+            )
+
+        if self.shape != ():
+            raise NotImplementedError('Comparision for arrays is ambiguous')
+
+        ratio = self.available_units[self._unit] / other.available_units[other._unit]
+        return self._value * ratio <= other._value
 
     def __hash__(self):
         # Raise error if underlying value is a numpy array
