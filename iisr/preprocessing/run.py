@@ -253,4 +253,5 @@ def run_processing(config: LaunchConfig):
                                         output_formats=config.output_formats,
                                         subfolders=[config.output_dir_suffix])
     finally:
-        logging.info(f'Processing successful. Elapsed time: {time.time() - start_time:.0f} s')
+        logging.info(f'Elapsed time: {time.time() - start_time:.0f} s')
+    logging.info(f'Processing successful')
