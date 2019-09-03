@@ -246,7 +246,7 @@ def timeout_filter(timeout, invalid_time_mark_policy: str = 'yield_timeout'
                           ''.format(package.time_mark, prev_time_mark)
                 if invalid_time_mark_policy == 'yield_timeout':
                     is_timeout = True
-                    logging.info(err_msg)
+                    logging.info(err_msg + ', previous quadratures dropped (marked as a timeout)')
                 else:
                     raise RuntimeError(err_msg)
         else:

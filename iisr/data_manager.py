@@ -49,6 +49,11 @@ class DataManager:
             subfolders = []
         return self.get_folder_path(date, subfolders=[self.PREPROCESSING_FOLDER_NAME] + subfolders)
 
+    def get_postproc_folder_path(self, date: dt.date = None, subfolders: List[str] = None) -> Path:
+        if subfolders is None:
+            subfolders = []
+        return self.get_folder_path(date, subfolders=[self.POSTPROCESSING_FOLDER_NAME] + subfolders)
+
     def get_figures_folder_path(self, date: dt.date = None, subfolders: List[str] = None) -> Path:
         if subfolders is None:
             subfolders = []

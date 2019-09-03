@@ -22,7 +22,7 @@ from collections import namedtuple, defaultdict, OrderedDict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from typing import IO, Dict, Tuple, Iterable, List, Union
+from typing import IO, Dict, Tuple, Iterable, List, Union, Any
 
 import numpy as np
 
@@ -663,6 +663,10 @@ class DataFileReader(DataFileIO):
 
     time_diff_zero = timedelta()
 
+    @staticmethod
+    def _is_unique(l: List[Any]) -> bool:
+        return len(set(l)) == len(l)
+
     def read_series(self):
         yield from self._series
 
@@ -680,7 +684,14 @@ class DataFileReader(DataFileIO):
 
         grouped_time_series = it.groupby(self._series, key=grouping_condition)
         for unique_time_mark, time_series_group in grouped_time_series:
-            yield TimeSeriesPackage(unique_time_mark, list(time_series_group))
+            # There is a bug in the data that consequent time block may have same time mark.
+            # If this situation occur, we drop excessive blocks
+            time_series_group = list(time_series_group)
+            for num, series in enumerate(time_series_group[1:], 1):
+                if series.parameters.channel == time_series_group[0].parameters.channel:
+                    time_series_group = time_series_group[:num]
+                    break
+            yield TimeSeriesPackage(unique_time_mark, time_series_group)
 
     def __iter__(self):
         return self._series
@@ -751,6 +762,7 @@ class DataFileReader(DataFileIO):
             )
 
         # Reading remaining data
+        prev_time_mark = None
         while True:
             # Read super block, annotation of data
             header_code, block_length = self._read_header()
