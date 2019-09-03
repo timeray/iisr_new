@@ -15,6 +15,8 @@ from iisr.representation import ReprJSONEncoder, ReprJSONDecoder
 from iisr.utils import merge, infinite_defaultdict
 from iisr import StdFile, AnnotatedData
 
+DATE_FMT = '%Y-%m-%d'
+
 
 def _merge_stdfiles(file1: StdFile, file2: StdFile) -> StdFile:
     def key_fn(data: AnnotatedData):
@@ -254,27 +256,65 @@ def timeout_filter(timeout, invalid_time_mark_policy: str = 'yield_timeout'
 
 
 class Supervisor(metaclass=ABCMeta):
+    AggregatorReturnType = Tuple[dt.date, HandlerParameters, HandlerBatch]
+
     """Supervisor manages data processing for specific mode of operation"""
     @abstractmethod
     def aggregator(self, packages: Iterator[TimeSeriesPackage],
-                   ) -> Generator[Tuple[HandlerParameters, HandlerBatch], Any, Any]:
+                   ) -> Generator[AggregatorReturnType, Any, Any]:
         """Aggregate input packages by parameters to create arrays of quadratures"""
 
     @abstractmethod
     def init_handler(self, *args, **kwargs) -> Handler:
         """Initialize new handler"""
 
+    @staticmethod
+    def save_complete_results(handlers: Dict[HandlerParameters, Handler],
+                              output_formats, data_manager, subfolders):
+        results = []
+        for handler in handlers.values():
+            results.append(handler.finish())
+
+        for out_fmt in output_formats:
+            if out_fmt == 'pkl':
+                for result in results:
+                    result.save_pickle(data_manager, subfolders)
+            elif out_fmt == 'std':
+                _merge_and_save_stdfiles(results, data_manager)
+            else:
+                logging.warning('Unexpected format from config: {}'.format(out_fmt))
+
     def process_packages(self, packages: Iterator[TimeSeriesPackage],
                          data_manager: DataManager = None,
                          output_formats: List[str] = None,
-                         subfolders: List[str] = None) -> List[HandlerResult]:
+                         subfolders: List[str] = None):
         """Process all packages from the generator to get list of results"""
-        # Group series by parameters to n_acc, check for timeouts
 
         handlers = {}
+        curr_date = None
         save_results = output_formats is not None and output_formats
         save_intermediate_txt = 'txt' in output_formats if save_results else None
-        for key_params, batch in self.aggregator(packages):
+
+        for date, key_params, batch in self.aggregator(packages):
+            # Split results by date
+            # When new date appears, finish all
+            if curr_date is None:
+                logging.info(f'Process date {date.strftime(DATE_FMT)}')
+                curr_date = date
+            elif curr_date < date:
+                # Save the results
+                logging.info(f'Save results for date {date.strftime(DATE_FMT)}')
+                self.save_complete_results(handlers, output_formats, data_manager, subfolders)
+
+                curr_date = date
+                logging.info(f'Process date {date.strftime(DATE_FMT)}')
+                handlers = {}  # erase all handlers
+            elif curr_date == date:
+                pass
+            else:
+                raise RuntimeError('New date is earlier than current date - cannot perform '
+                                   'split by date')
+
             # If no there is no handler for given parameters, create it
             if key_params in handlers:
                 handler = handlers[key_params]
@@ -287,18 +327,4 @@ class Supervisor(metaclass=ABCMeta):
             if save_intermediate_txt:
                 intermediate_result.append_to_txt(data_manager, subfolders)
 
-        results = []
-        for handler in handlers.values():
-            results.append(handler.finish())
-
-        if save_results:
-            for out_fmt in output_formats:
-                if out_fmt == 'pkl':
-                    for result in results:
-                        result.save_pickle(data_manager, subfolders)
-                elif out_fmt == 'std':
-                    _merge_and_save_stdfiles(results, data_manager)
-                else:
-                    logging.warning('Unexpected format from config: {}'.format(out_fmt))
-
-        return results
+        self.save_complete_results(handlers, output_formats, data_manager, subfolders)

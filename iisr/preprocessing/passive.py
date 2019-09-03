@@ -2,14 +2,16 @@ import datetime as dt
 import pickle as pkl
 from collections import defaultdict, namedtuple
 from enum import Enum
+from pathlib import Path
 
 import numpy as np
-from typing import List, TextIO, Dict, IO, Iterator, Tuple, Generator, Any, BinaryIO, Optional, \
-    Iterable
+from typing import List, TextIO, Dict, IO, Iterator, Tuple, Generator, Any, Optional, Iterable, \
+    Union
 
+from iisr.filtering import MedianAdAroundMedianFilter
 from iisr.iisr_io import FileInfo, TimeSeriesPackage
 from iisr.preprocessing.representation import HandlerResult, Handler, HandlerParameters, \
-    Supervisor, timeout_filter, HandlerBatch
+    Supervisor, timeout_filter
 from iisr.representation import Channel
 from iisr.units import Frequency
 from iisr.utils import central_time, uneven_mean
@@ -131,14 +133,20 @@ class PassiveResult(HandlerResult):
         return self.parameters.sampling_frequency
 
     def save_pickle(self, path_manager: DataManager, subfolders: List[str] = None):
-        dirpath = path_manager.get_folder_path(date=self.dates[0], subfolders=subfolders)
+        dirpath = path_manager.get_preproc_folder_path(date=self.dates[0], subfolders=subfolders)
         with open(str(dirpath / ('passive_' + self.short_name + '.pkl')), 'wb') as file:
             pkl.dump(self, file)
 
     @classmethod
-    def load_pickle(cls, file: List[BinaryIO]) -> 'PassiveTrack':
-        assert len(file) == 1, 'Multiple file read is not implemented'
-        return pkl.load(file[0])
+    def load_pickle(cls, filepaths: Union[Path, List[Path]]) -> 'PassiveResult':
+        if isinstance(filepaths, list):
+            assert len(filepaths) == 1, 'Multiple file read is not implemented'
+            filepath = filepaths[0]
+        else:
+            filepath = filepaths
+
+        with open(str(filepath), 'rb') as file:
+            return pkl.load(file)
 
 
 class PassiveScanBatchResult(PassiveResult):
@@ -172,8 +180,8 @@ class PassiveScan(PassiveResult):
 
         self.time_marks = np.array(time_marks, dtype=dt.datetime)
         self.frequencies = frequencies
-        self.spectra = {ch: np.array(spectra[ch]).T for ch in spectra}
-        self.coherence = np.array(coherence).T
+        self.spectra = {ch: np.array(spectra[ch]) for ch in spectra}
+        self.coherence = np.array(coherence)
         self.dates = sorted(set(tm.date() for tm in time_marks))
 
 
@@ -217,7 +225,7 @@ class PassiveTrack(PassiveResult):
         self._frequencies = None  # cache
 
     @property
-    def frequencies(self):
+    def frequencies(self) -> Frequency:
         """Frequencies array of size [n_times x n_fft].
 
         Differs from scan-mode frequencies, because frequencies vary with time.
@@ -227,16 +235,14 @@ class PassiveTrack(PassiveResult):
             ref_band = calc_ref_band(self.n_fft, self.sampling_frequency)
             self._frequencies = np.empty((len(self.time_marks), self.n_fft), dtype=float)
             for time_num, freq in enumerate([fr['Hz'] for fr in self.central_frequencies]):
-                self._frequencies[time_num] = freq + ref_band
+                self._frequencies[time_num] = freq + ref_band['Hz']
+            self._frequencies = Frequency(self._frequencies, 'Hz')
 
         return self._frequencies
 
 
-class PassiveBatch(HandlerBatch):
-    def __init__(self, time_marks: Any, batch_params: Any, quadratures: Any):
-        self.time_marks = time_marks
-        self.batch_params = batch_params
-        self.quadratures = quadratures
+class PassiveBatch:
+    pass
 
 
 class PassiveScanBatch(PassiveBatch):
@@ -244,7 +250,9 @@ class PassiveScanBatch(PassiveBatch):
                  time_marks: List[List[dt.datetime]],
                  batch_params: Dict,
                  quadratures: Dict[Channel, List[np.ndarray]]):
-        super().__init__(time_marks, batch_params, quadratures)
+        self.time_marks = time_marks
+        self.batch_params = batch_params
+        self.quadratures = quadratures
 
 
 class PassiveTrackBatch(PassiveBatch):
@@ -252,13 +260,18 @@ class PassiveTrackBatch(PassiveBatch):
                  time_marks: List[dt.datetime],
                  batch_params: Dict,
                  quadratures: Dict[Channel, np.ndarray]):
-        super().__init__(time_marks, batch_params, quadratures)
+        self.time_marks = time_marks
+        self.batch_params = batch_params
+        self.quadratures = quadratures
 
 
 class PassiveHandler(Handler):
-    def __init__(self, parameters: PassiveParameters, eval_coherence=True):
+    def __init__(self, parameters: PassiveParameters, eval_coherence=True,
+                 filter_threshold=5.0, outlier_max_rate=0.05):
         self.parameters = parameters
         self.eval_coherence = eval_coherence
+        self.filter = MedianAdAroundMedianFilter(filter_threshold)
+        self.outlier_max_rate = outlier_max_rate
 
     @property
     def channels(self):
@@ -299,17 +312,45 @@ class PassiveHandler(Handler):
 
         return cross_spectra_mean / np.sqrt(power_spectra1 * power_spectra2)
 
+    def sigma_filter(self, time_marks: List[dt.datetime], quadratures: Dict[Channel, np.ndarray]
+                     ) -> Tuple[List[dt.datetime], Dict[Channel, np.ndarray]]:
+        """Perform sigma filtering of quadratures"""
+        # Calculate drop mask (in time dimension) that is ch
+        drop_mask = np.zeros(self.n_avg, dtype=bool)
+        for ch, quads in quadratures.items():
+            flat_quads = quads.ravel()
+
+            mask = self.filter(flat_quads.real).mask | self.filter(flat_quads.imag).mask
+            mask = mask.reshape((self.n_avg, self.n_fft))
+
+            outlier_rate = mask.sum(axis=1) / self.n_fft
+            drop_mask |= outlier_rate > self.outlier_max_rate
+
+        # Apply drop mask to the data
+        new_time_marks = [tm for tm, mask in zip(time_marks, drop_mask) if not mask]
+        new_quadratures = {}
+        for ch, quads in quadratures.items():
+            new_quadratures[ch] = quads[~drop_mask]
+
+        return new_time_marks, new_quadratures
+
     def finish(self):
         return NotImplemented
 
 
 class PassiveScanHandler(PassiveHandler):
-    def __init__(self, parameters: PassiveScanParameters, eval_coherence=True):
-        super().__init__(parameters, eval_coherence=eval_coherence)
+    def __init__(self, parameters: PassiveScanParameters, eval_coherence=True,
+                 filter_threshold=5.0, outlier_max_rate=0.05):
+        super().__init__(parameters,
+                         eval_coherence=eval_coherence,
+                         filter_threshold=filter_threshold,
+                         outlier_max_rate=outlier_max_rate)
         self.central_frequencies = parameters.central_frequencies
         self.n_central = len(self.central_frequencies)
         self.frequencies, self.band_masks = self._get_non_overlapping_masks()
         self.intermediate_results = []
+        self.filter = MedianAdAroundMedianFilter(filter_threshold)
+        self.outlier_max_rate = outlier_max_rate
 
     def _get_non_overlapping_masks(self):
         frequencies = []
@@ -357,8 +398,21 @@ class PassiveScanHandler(PassiveHandler):
                 if q_arr.shape != (len(dt_arr), self.n_fft):
                     raise ValueError('Incorrect shape of quadratures arrays')
 
+    def filter_batch(self, batch: PassiveScanBatch):
+        """Perform filtering of scan data batch"""
+        n_freqs = len(batch.time_marks)
+        for freq_num in range(n_freqs):
+            time_marks = batch.time_marks[freq_num]
+            quadratures = {ch: quads_per_freq[freq_num] for ch, quads_per_freq
+                           in batch.quadratures.items()}
+            new_time_marks, new_quadratures = self.sigma_filter(time_marks, quadratures)
+            batch.time_marks[freq_num] = new_time_marks
+            for ch, quads_per_freq in batch.quadratures.items():
+                quads_per_freq[freq_num] = new_quadratures[ch]
+
     def handle(self, batch: PassiveScanBatch):
         self._assert_correct_batch(batch)
+        self.filter_batch(batch)
 
         # Whole input arrays (each channel and each frequency)
         # will be represented by single time mark
@@ -411,8 +465,12 @@ class PassiveScanHandler(PassiveHandler):
 
 
 class PassiveTrackHandler(PassiveHandler):
-    def __init__(self, parameters: PassiveTrackParameters, eval_coherence=True):
-        super().__init__(parameters, eval_coherence=eval_coherence)
+    def __init__(self, parameters: PassiveTrackParameters, eval_coherence=True,
+                 filter_threshold=5.0, outlier_max_rate=0.05):
+        super().__init__(parameters,
+                         eval_coherence=eval_coherence,
+                         filter_threshold=filter_threshold,
+                         outlier_max_rate=outlier_max_rate)
         self.intermediate_results = []
 
     def _assert_correct_batch(self, batch: PassiveTrackBatch):
@@ -430,8 +488,13 @@ class PassiveTrackHandler(PassiveHandler):
             if channel_quads.shape != (len(time_marks), self.n_fft):
                 raise ValueError('Incorrect shape of quadratures arrays')
 
+    def filter_batch(self, batch: PassiveTrackBatch):
+        """Perform filtering of track data batch"""
+        batch.time_marks, batch.quadratures = self.sigma_filter(batch.time_marks, batch.quadratures)
+
     def handle(self, batch: PassiveTrackBatch):
         self._assert_correct_batch(batch)
+        self.filter_batch(batch)
 
         time_mark = central_time(batch.time_marks)
         timestamps = np.array([tm.timestamp() for tm in batch.time_marks])
@@ -469,7 +532,6 @@ class PassiveTrackHandler(PassiveHandler):
 
 class PassiveSupervisor(Supervisor):
     """Supervisor that manages passive processing"""
-    UniqueParams = namedtuple('UniqueParams', ['mode'])
     AggYieldType = Tuple[PassiveParameters, PassiveBatch]
 
     def __init__(self, n_accumulation: int, n_fft: int, timeout: dt.timedelta,
@@ -483,6 +545,7 @@ class PassiveSupervisor(Supervisor):
         self.eval_spectra = eval_spectra
         self.eval_coherence = eval_coherence
 
+        self._current_date = None
         self._current_mode = None
         self._track_mode_current_frequency = None
         self._scan_frequencies_set = set()
@@ -490,6 +553,7 @@ class PassiveSupervisor(Supervisor):
         self._buffer = None
 
     def track_mode_aggregate(self, package: TimeSeriesPackage) -> Optional[AggYieldType]:
+        date = package.time_mark.date()
         frequency = package.time_series_list[0].parameters.frequency
         channels = [package.time_series_list[0].parameters.channel,
                     package.time_series_list[1].parameters.channel]
@@ -497,9 +561,12 @@ class PassiveSupervisor(Supervisor):
         def _get_new_buffer():
             return [], {ch: [] for ch in channels}
 
-        if self._buffer is None or frequency != self._track_mode_current_frequency:
+        if self._buffer is None \
+                or frequency != self._track_mode_current_frequency \
+                or date != self._current_date:
             # Tuple of time array and channel dict for quadratures arrays
             self._buffer = _get_new_buffer()
+            self._current_date = date
             self._track_mode_current_frequency = frequency
 
         quads1 = package.time_series_list[0].quadratures.reshape(-1, self.n_fft)
@@ -529,13 +596,17 @@ class PassiveSupervisor(Supervisor):
                                                         n_fft=self.n_fft,
                                                         channels=channels,
                                                         band_type='wide')
-                time_marks = np.array(acc_marks, dtype=dt.datetime)
-                quadratures = {ch: np.stack(self._buffer[1][ch])for ch in channels}
-                result = passive_params, PassiveBatch(time_marks, batch_params, quadratures)
+                quadratures = {ch: np.stack(self._buffer[1][ch]) for ch in channels}
+                result = (
+                    self._current_date,
+                    passive_params,
+                    PassiveTrackBatch(acc_marks, batch_params, quadratures)
+                )
                 self._buffer = _get_new_buffer()
         return result
 
     def scan_mode_aggregate(self, package: TimeSeriesPackage) -> Optional[AggYieldType]:
+        date = package.time_mark.date()
         frequency = package.time_series_list[0].parameters.frequency
         channels = [package.time_series_list[0].parameters.channel,
                     package.time_series_list[1].parameters.channel]
@@ -549,8 +620,9 @@ class PassiveSupervisor(Supervisor):
             # Return buffer of (Dict[Frequency, time_marks], Dict[Channel, Dict[Frequency, quads]])
             return defaultdict(list), {ch: defaultdict(list) for ch in channels}
 
-        if self._buffer is None:
+        if self._buffer is None or date != self._current_date:
             self._buffer = _get_new_buffer()
+            self._current_date = date
 
         quads1 = package.time_series_list[0].quadratures.reshape(-1, self.n_fft)
         quads2 = package.time_series_list[1].quadratures.reshape(-1, self.n_fft)
@@ -590,10 +662,17 @@ class PassiveSupervisor(Supervisor):
                 )
                 time_marks = [acc_marks[fr] for fr in self._scan_frequencies]
                 quadratures = {
-                    ch: [np.stack(self._buffer[1][ch][fr]) for fr in self._scan_frequencies]
+                    # Scan frequencies have wrong order: quadratures of lowest frequency should be
+                    # at the position of highest frequency.
+                    ch: [np.stack(self._buffer[1][ch][fr]) for fr
+                         in self._scan_frequencies[1:] + [self._scan_frequencies[0]]]
                     for ch in channels
                 }
-                result = passive_params, PassiveScanBatch(time_marks, batch_params, quadratures)
+                result = (
+                    self._current_date,
+                    passive_params,
+                    PassiveScanBatch(time_marks, batch_params, quadratures)
+                )
 
                 self._buffer = _get_new_buffer()
         return result

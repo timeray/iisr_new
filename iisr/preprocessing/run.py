@@ -244,12 +244,13 @@ def run_processing(config: LaunchConfig):
 
     manager = DataManager()
     # Process series
-    with iisr_io.read_files_by('blocks',
-                               paths=config.paths,
-                               series_selector=config.series_filter()) as generator:
-        results = supervisor.process_packages(generator,
-                                              data_manager=manager,
-                                              output_formats=config.output_formats,
-                                              subfolders=[config.output_dir_suffix])
-
-    logging.info('Processing successful. Elapsed time: {:.0f} s'.format(time.time() - start_time))
+    try:
+        with iisr_io.read_files_by('blocks',
+                                   paths=config.paths,
+                                   series_selector=config.series_filter()) as generator:
+            supervisor.process_packages(generator,
+                                        data_manager=manager,
+                                        output_formats=config.output_formats,
+                                        subfolders=[config.output_dir_suffix])
+    finally:
+        logging.info(f'Processing successful. Elapsed time: {time.time() - start_time:.0f} s')

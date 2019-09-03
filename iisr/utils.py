@@ -2,7 +2,7 @@
 Useful methods.
 """
 from collections import defaultdict
-from datetime import datetime
+import datetime as dt
 
 import numpy as np
 from typing import Sequence, List, Callable, Union
@@ -10,6 +10,41 @@ from scipy.integrate import trapz, simps
 
 DATE_FMT = '%Y-%m-%d'
 TIME_FMT = '%H:%M:%S'
+
+LOCAL_OFFSET = dt.timedelta(hours=8)
+ZERO_OFFSET = dt.timedelta(0)
+
+
+# UTC time zone
+class UTC(dt.tzinfo):
+    """UTC"""
+    def utcoffset(self, dt):
+        return ZERO_OFFSET
+
+    def tzname(self, dt):
+        return 'UT'
+
+    def dst(self, dt):
+        return ZERO_OFFSET
+
+
+# Local time zone
+class LocalTime(dt.tzinfo):
+    """Local"""
+    def utcoffset(self, dt):
+        return LOCAL_OFFSET
+
+    def dst(self, dt):
+        return ZERO_OFFSET
+
+    def tzname(self, dt):
+        return 'LT'
+
+
+utc_tz = UTC()
+local_tz = LocalTime()
+
+tz_dict = {'UT': utc_tz, 'LT': local_tz}
 
 
 def uneven_mean(x: np.ndarray, y: np.ndarray, axis: int = -1, method: str = 'trapz'
@@ -35,7 +70,7 @@ def uneven_mean(x: np.ndarray, y: np.ndarray, axis: int = -1, method: str = 'tra
         raise ValueError(f'Unknown method: {method}')
 
 
-def central_time(dtimes: Sequence[datetime]) -> datetime:
+def central_time(dtimes: Sequence[dt.datetime]) -> dt.datetime:
     """Return central time of datetime array.
 
     Args:
@@ -47,7 +82,7 @@ def central_time(dtimes: Sequence[datetime]) -> datetime:
     sorted_dtimes = sorted(dtimes)
     if len(sorted_dtimes) < 2:
         return sorted_dtimes[0]
-    if not isinstance(sorted_dtimes[0], datetime) or not isinstance(sorted_dtimes[-1], datetime):
+    if not isinstance(sorted_dtimes[0], dt.datetime) or not isinstance(sorted_dtimes[-1], dt.datetime):
         raise ValueError('Input sequence should be sequence of datetimes')
     return sorted_dtimes[0] + (sorted_dtimes[-1] - sorted_dtimes[0]) / 2
 

@@ -26,6 +26,7 @@ class DataManager:
     Data manager controls output files of processing.
     """
     PREPROCESSING_FOLDER_NAME = 'pre_proc'
+    FIGURES_FOLDER_NAME = 'Figures'
     POSTPROCESSING_FOLDER_NAME = 'post_proc'
 
     def __init__(self, main_folder_path: Path = CONFIG_MAIN_FOLDER):
@@ -43,14 +44,22 @@ class DataManager:
         elif not self.main_folder.is_dir():
             raise NotADirectoryError('{}'.format(self.main_folder))
 
+    def get_preproc_folder_path(self, date: dt.date = None, subfolders: List[str] = None) -> Path:
+        if subfolders is None:
+            subfolders = []
+        return self.get_folder_path(date, subfolders=[self.PREPROCESSING_FOLDER_NAME] + subfolders)
+
+    def get_figures_folder_path(self, date: dt.date = None, subfolders: List[str] = None) -> Path:
+        if subfolders is None:
+            subfolders = []
+        return self.get_folder_path(date, subfolders=[self.FIGURES_FOLDER_NAME] + subfolders)
+
     def get_folder_path(self, date: dt.date = None, subfolders: List[str] = None) -> Path:
         self._check_main_folder()
         path = self.main_folder
         if date is not None:
             date_str = date.strftime(DATE_FMT)
             path /= date_str
-
-        path /= self.PREPROCESSING_FOLDER_NAME
 
         if subfolders:
             for folder in subfolders:
@@ -61,7 +70,7 @@ class DataManager:
 
     def get_file_path(self, filename: str, date: dt.date = None, subfolders: List[str] = None
                       ) -> Path:
-        return self.get_folder_path(date, subfolders) / filename
+        return self.get_preproc_folder_path(date, subfolders) / filename
 
     def save_stdfile(self, stdfile: StdFile, filename: str, save_dir_suffix=''):
         self._check_main_folder()

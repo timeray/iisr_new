@@ -3,6 +3,7 @@ Command line program for first stage processing of IISR data.
 Create configuration files, based on default .ini file, to modify options of processing.
 """
 import sys
+from glob import iglob
 import argparse
 import configparser
 import logging
@@ -63,7 +64,7 @@ def _parse_path(paths: str) -> List[Path]:
     parsed_paths = []
     for path in _parse_list(paths):
         if path != '~':
-            parsed_paths.append(Path(path))
+            parsed_paths.extend(Path(p) for p in iglob(path))
         else:
             parsed_paths.append(Path.home())
     return parsed_paths
