@@ -67,7 +67,7 @@ def _parse_path(paths: str) -> List[Path]:
             parsed_paths.extend(Path(p) for p in iglob(path))
         else:
             parsed_paths.append(Path.home())
-    return parsed_paths
+    return sorted(parsed_paths)
 
 
 @option_parser_decorator
