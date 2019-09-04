@@ -10,7 +10,7 @@ refined parameters that store all important information and easy to work with.
 Raw parameters are represented by a dictionary.
 Refined parameters are represented by class Parameters.
 """
-
+import traceback
 import contextlib
 import gzip
 import itertools as it
@@ -1125,14 +1125,18 @@ def read_files_by(read_type: str, paths: Iterable[Path], only_headers: bool = Fa
         for path_num, path in enumerate(file_paths, 1):
             logging.info('[{}/{}] Process file: {}'.format(path_num, len(file_paths), path))
 
-            with open_data_file(path, only_headers=only_headers,
-                                series_selector=series_selector) as data_reader:
-                if read_type == 'blocks':
-                    yield from data_reader.read_blocks()
-                elif read_type == 'series':
-                    yield from data_reader.read_series()
-                else:
-                    raise AssertionError()
+            try:
+                with open_data_file(path, only_headers=only_headers,
+                                    series_selector=series_selector) as data_reader:
+                    if read_type == 'blocks':
+                        yield from data_reader.read_blocks()
+                    elif read_type == 'series':
+                        yield from data_reader.read_series()
+                    else:
+                        raise AssertionError()
+            except Exception:
+                logging.error('Error occured during file processing. Traceback:')
+                logging.error(traceback.format_exc())
 
     generator = _generator()
     try:
