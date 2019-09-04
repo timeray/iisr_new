@@ -1,8 +1,9 @@
 import datetime as dt
 import pickle as pkl
-from collections import defaultdict, namedtuple
+from collections import defaultdict, deque
 from enum import Enum
 from pathlib import Path
+import logging
 
 import numpy as np
 from typing import List, TextIO, Dict, IO, Iterator, Tuple, Generator, Any, Optional, Iterable, \
@@ -559,7 +560,7 @@ class PassiveSupervisor(Supervisor):
                     package.time_series_list[1].parameters.channel]
 
         def _get_new_buffer():
-            return [], {ch: [] for ch in channels}
+            return deque(), {ch: deque() for ch in channels}
 
         if self._buffer is None \
                 or frequency != self._track_mode_current_frequency \
@@ -576,8 +577,7 @@ class PassiveSupervisor(Supervisor):
         delta_t_us = 1 / sampling_frequency['MHz']
         acc_marks = self._buffer[0]
 
-        # Assuming n_accumulation * n_fft >> length of the series
-        result = None
+        # Cut quadratures into n_fft pieces
         for series_split_num in range(len(quads1)):
             microseconds_shift = dt.timedelta(
                 microseconds=series_split_num * self.n_fft * delta_t_us
@@ -587,22 +587,29 @@ class PassiveSupervisor(Supervisor):
             for ch_num, quad in enumerate([quads1, quads2]):
                 self._buffer[1][channels[ch_num]].append(quad[series_split_num])
 
-            if len(acc_marks) == self.n_accumulation:
-                mode = get_passive_mode(package.time_series_list[0].parameters.file_info)
-                batch_params = {'central_frequency': self._track_mode_current_frequency}
-                passive_params = PassiveTrackParameters(mode=mode,
-                                                        sampling_frequency=sampling_frequency,
-                                                        n_accumulation=self.n_accumulation,
-                                                        n_fft=self.n_fft,
-                                                        channels=channels,
-                                                        band_type='wide')
-                quadratures = {ch: np.stack(self._buffer[1][ch]) for ch in channels}
-                result = (
-                    self._current_date,
-                    passive_params,
-                    PassiveTrackBatch(acc_marks, batch_params, quadratures)
-                )
-                self._buffer = _get_new_buffer()
+        # If accumulation limit is reached, return the result
+        result = None
+        if len(acc_marks) > self.n_accumulation:
+            mode = get_passive_mode(package.time_series_list[0].parameters.file_info)
+            batch_params = {'central_frequency': self._track_mode_current_frequency}
+            passive_params = PassiveTrackParameters(mode=mode,
+                                                    sampling_frequency=sampling_frequency,
+                                                    n_accumulation=self.n_accumulation,
+                                                    n_fft=self.n_fft,
+                                                    channels=channels,
+                                                    band_type='wide')
+            time_marks = []
+            quadratures = {ch: [] for ch in channels}
+            for i in range(self.n_accumulation):
+                time_marks.append(acc_marks.popleft())
+                for ch in channels:
+                    quadratures[ch].append(self._buffer[1][ch].popleft())
+            quadratures = {ch: np.stack(l) for ch, l in quadratures.items()}
+            result = (
+                self._current_date,
+                passive_params,
+                PassiveTrackBatch(time_marks, batch_params, quadratures)
+            )
         return result
 
     def scan_mode_aggregate(self, package: TimeSeriesPackage) -> Optional[AggYieldType]:
@@ -618,63 +625,72 @@ class PassiveSupervisor(Supervisor):
 
         def _get_new_buffer():
             # Return buffer of (Dict[Frequency, time_marks], Dict[Channel, Dict[Frequency, quads]])
-            return defaultdict(list), {ch: defaultdict(list) for ch in channels}
+            return defaultdict(deque), {ch: defaultdict(deque) for ch in channels}
 
         if self._buffer is None or date != self._current_date:
             self._buffer = _get_new_buffer()
             self._current_date = date
+
+        acc_marks = self._buffer[0]
+        # Check if number time marks for given frequency reached n_accumulation
+        if len(acc_marks[frequency]) > self.n_accumulation:
+            logging.warn(f'Number of quadratures for {frequency} at time {package.time_mark} '
+                         f'exceeded number of accumulated samples - maybe quadratures for some '
+                         f'frequency were missed. Buffer will be reset.')
+            self._buffer = _get_new_buffer()
 
         quads1 = package.time_series_list[0].quadratures.reshape(-1, self.n_fft)
         quads2 = package.time_series_list[1].quadratures.reshape(-1, self.n_fft)
 
         sampling_frequency = package.time_series_list[0].parameters.sampling_frequency
         delta_t_us = 1 / sampling_frequency['MHz']
-        acc_marks = self._buffer[0]
 
-        result = None
+        # Cut quadratures into n_fft pieces
         for series_split_num in range(len(quads1)):
             microseconds_shift = dt.timedelta(
                 microseconds=series_split_num * self.n_fft * delta_t_us
             )
-            if len(acc_marks[frequency]) == self.n_accumulation:
-                raise RuntimeError(f'Number of quadratures for {frequency} exceeded number of '
-                                   f'accumulated samples - maybe quadratures for some frequency'
-                                   f'were missed')
-
             acc_marks[frequency].append(package.time_mark + microseconds_shift)
 
             for ch_num, quad in enumerate([quads1, quads2]):
                 self._buffer[1][channels[ch_num]][frequency].append(quad[series_split_num])
 
-            if all(len(marks) == self.n_accumulation for marks in acc_marks.values()):
-                if not self._scan_frequencies:
-                    self._scan_frequencies = sorted(acc_marks.keys())
-                    self._scan_frequencies_set.update(self._scan_frequencies)
+        # If quadratures for every frequency reached n_accumulation, return the result
+        result = None
+        if all(len(marks) > self.n_accumulation for marks in acc_marks.values()):
+            if not self._scan_frequencies:
+                self._scan_frequencies = sorted(acc_marks.keys())
+                self._scan_frequencies_set.update(self._scan_frequencies)
 
-                batch_params = {}
-                passive_params = PassiveScanParameters(
-                    sampling_frequency=sampling_frequency,
-                    n_accumulation=self.n_accumulation,
-                    n_fft=self.n_fft,
-                    central_frequencies=self._scan_frequencies,
-                    channels=channels,
-                    band_type='wide'
-                )
-                time_marks = [acc_marks[fr] for fr in self._scan_frequencies]
-                quadratures = {
-                    # Scan frequencies have wrong order: quadratures of lowest frequency should be
-                    # at the position of highest frequency.
-                    ch: [np.stack(self._buffer[1][ch][fr]) for fr
-                         in self._scan_frequencies[1:] + [self._scan_frequencies[0]]]
-                    for ch in channels
-                }
-                result = (
-                    self._current_date,
-                    passive_params,
-                    PassiveScanBatch(time_marks, batch_params, quadratures)
-                )
+            batch_params = {}
+            passive_params = PassiveScanParameters(
+                sampling_frequency=sampling_frequency,
+                n_accumulation=self.n_accumulation,
+                n_fft=self.n_fft,
+                central_frequencies=self._scan_frequencies,
+                channels=channels,
+                band_type='wide'
+            )
+            n_freqs = len(self._scan_frequencies)
+            time_marks = [[] for _ in range(n_freqs)]
+            quadratures = {ch: [[] for _ in range(n_freqs)] for ch in channels}
+            # Scan frequencies have wrong order: quadratures of lowest frequency should be
+            # at the position of highest frequency.
+            for i, fr in enumerate(self._scan_frequencies[1:] + [self._scan_frequencies[0]]):
+                for _ in range(self.n_accumulation):
+                    time_marks[i].append(acc_marks[fr].popleft())
+                    for ch in channels:
+                        quadratures[ch][i].append(self._buffer[1][ch][fr].popleft())
 
-                self._buffer = _get_new_buffer()
+                for ch in channels:
+                    quadratures[ch][i] = np.stack(quadratures[ch][i])
+
+            result = (
+                self._current_date,
+                passive_params,
+                PassiveScanBatch(time_marks, batch_params, quadratures)
+            )
+
         return result
 
     def aggregator(self, packages: Iterator[TimeSeriesPackage]

@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import datetime as dt
 
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Optional
 
 from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -34,7 +34,7 @@ def _split_scan_by_timeout(dtimes_, freqs_, array_: Union[np.ndarray, Dict], tim
 def _split_track_by_timeout(dtimes_, freqs_, array_: Union[np.ndarray, Dict], timeout: dt.timedelta):
     split_args = __get_split_args(dtimes_, timeout)
     new_dtimes = np.split(dtimes_, split_args)
-    new_freqs = Frequency(np.split(freqs_['Hz'], split_args), 'Hz')
+    new_freqs = [Frequency(arr, 'Hz') for arr in np.split(freqs_['Hz'], split_args)]
     if isinstance(array_, dict):
         new_arrays = {ch: np.split(arr, split_args) for ch, arr in array_.items()}
     else:
@@ -42,24 +42,25 @@ def _split_track_by_timeout(dtimes_, freqs_, array_: Union[np.ndarray, Dict], ti
     return new_dtimes, new_freqs, new_arrays
 
 
-def _prepare_scan_tracks_spectra(scan: PassiveScan, tracks: List[PassiveTrack], decimation,
-                                 timeout: dt.timedelta):
+def _prepare_scan_tracks_spectra(scan: Optional[PassiveScan], tracks: List[PassiveTrack],
+                                 decimation: int, timeout: dt.timedelta):
     dtimes = []
     freqs = []
     value = defaultdict(list)
 
-    dtimes_scan, freqs_scan, spectra_scan = scan.time_marks, scan.frequencies, scan.spectra
-    dtimes_scan = dtimes_scan[::decimation]
-    spectra_scan = {ch: sp[::decimation] for ch, sp in spectra_scan.items()}
+    if scan is not None:
+        dtimes_scan, freqs_scan, spectra_scan = scan.time_marks, scan.frequencies, scan.spectra
+        dtimes_scan = dtimes_scan[::decimation]
+        spectra_scan = {ch: sp[::decimation] for ch, sp in spectra_scan.items()}
 
-    dtimes_scan, freqs_scan, spectra_scan = _split_scan_by_timeout(
-        dtimes_scan, freqs_scan, spectra_scan, timeout=timeout
-    )
+        dtimes_scan, freqs_scan, spectra_scan = _split_scan_by_timeout(
+            dtimes_scan, freqs_scan, spectra_scan, timeout=timeout
+        )
 
-    dtimes.extend(dtimes_scan)
-    freqs.extend(freqs_scan)
-    for ch, arr in spectra_scan.items():
-        value[ch].extend(arr)
+        dtimes.extend(dtimes_scan)
+        freqs.extend(freqs_scan)
+        for ch, arr in spectra_scan.items():
+            value[ch].extend(arr)
 
     for track in tracks:
         dtimes_src, freqs_src, spectra_src = track.time_marks, track.frequencies, track.spectra
@@ -78,23 +79,24 @@ def _prepare_scan_tracks_spectra(scan: PassiveScan, tracks: List[PassiveTrack], 
     return dtimes, freqs, value
 
 
-def _prepare_scan_tracks_coherence(scan: PassiveScan, tracks: List[PassiveTrack], decimation,
-                                   timeout: dt.timedelta):
+def _prepare_scan_tracks_coherence(scan: Optional[PassiveScan], tracks: List[PassiveTrack],
+                                   decimation: int, timeout: dt.timedelta):
     dtimes = []
     freqs = []
     value = []
 
-    dtimes_scan, freqs_scan, coherence_scan = scan.time_marks, scan.frequencies, scan.coherence
-    dtimes_scan = dtimes_scan[::decimation]
-    coherence_scan = coherence_scan[::decimation]
+    if scan is not None:
+        dtimes_scan, freqs_scan, coherence_scan = scan.time_marks, scan.frequencies, scan.coherence
+        dtimes_scan = dtimes_scan[::decimation]
+        coherence_scan = coherence_scan[::decimation]
 
-    dtimes_scan, freqs_scan, coherence_scan = _split_scan_by_timeout(
-        dtimes_scan, freqs_scan, coherence_scan, timeout=timeout
-    )
+        dtimes_scan, freqs_scan, coherence_scan = _split_scan_by_timeout(
+            dtimes_scan, freqs_scan, coherence_scan, timeout=timeout
+        )
 
-    dtimes.extend(dtimes_scan)
-    freqs.extend(freqs_scan)
-    value.extend(coherence_scan)
+        dtimes.extend(dtimes_scan)
+        freqs.extend(freqs_scan)
+        value.extend(coherence_scan)
 
     for track in tracks:
         dtimes_src, freqs_src, coherence_src = track.time_marks, track.frequencies, track.coherence
@@ -113,7 +115,7 @@ def _prepare_scan_tracks_coherence(scan: PassiveScan, tracks: List[PassiveTrack]
 
 
 @plot_languages()
-def plot_daily_spectra(scan: PassiveScan, tracks: List[PassiveTrack], save_folder: Path,
+def plot_daily_spectra(scan: Optional[PassiveScan], tracks: List[PassiveTrack], save_folder: Path,
                        decimation=10, figsize=FIGSIZE_ONELONG,
                        level=None, timeout=dt.timedelta(minutes=30), colored=True, language=None):
     """
@@ -172,8 +174,8 @@ def plot_daily_spectra(scan: PassiveScan, tracks: List[PassiveTrack], save_folde
 
 
 @plot_languages()
-def plot_daily_coherence(scan: PassiveScan, tracks: List[PassiveTrack], save_folder: Path,
-                         decimation=10, figsize=FIGSIZE_TWOLONG, level=None,
+def plot_daily_coherence(scan: Optional[PassiveScan], tracks: List[PassiveTrack], save_folder: Path,
+                         decimation=10, figsize=FIGSIZE_TWOLONG,
                          timeout=dt.timedelta(minutes=30), colored=True, language=None):
     """
     Plot coherence for passive data.

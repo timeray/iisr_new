@@ -20,11 +20,12 @@ def main():
     sources = ['sun']
     tracks_filepaths = [data_dir / f'passive_{source_name}_wide.pkl' for source_name in sources]
 
-    scan = PassiveScan.load_pickle(scan_filepath)
-    tracks = [PassiveTrack.load_pickle(filepath) for filepath in tracks_filepaths]
+    scan = PassiveScan.load_pickle(scan_filepath) if scan_filepath.exists() else None
+    tracks = [PassiveTrack.load_pickle(filepath) for filepath in tracks_filepaths
+              if filepath.exists()]
 
     logging.info('Plot daily spectra')
-    plot_daily_spectra(scan, tracks, save_folder=save_dir, decimation=4, level=(0, 20))
+    plot_daily_spectra(scan, tracks, save_folder=save_dir, decimation=4)
 
     logging.info('Plot daily coherence')
     plot_daily_coherence(scan, tracks, save_folder=save_dir, decimation=4)
