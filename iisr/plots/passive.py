@@ -8,6 +8,8 @@ from typing import List, Dict, Union, Optional
 
 from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+from iisr.postprocessing.passive import SourceTrackInfo
 from iisr.preprocessing.passive import PassiveScan, PassiveTrack
 from iisr.units import Frequency
 from iisr.plots.helpers import *
@@ -18,6 +20,13 @@ FIGSIZE_TWOLONG = (15, 10)  # (10, 7.2)
 
 def __get_split_args(dtimes_, timeout: dt.timedelta):
     return np.where(np.abs(np.diff(dtimes_)) > timeout)[0] + 1
+
+
+def _split_1d_by_timeout(dtimes_, *arrs, timeout: dt.timedelta):
+    split_args = __get_split_args(dtimes_, timeout)
+    new_dtimes = np.split(dtimes_, split_args)
+    new_arrs = [np.split(arr, split_args) for arr in arrs]
+    return [new_dtimes] + new_arrs
 
 
 def _split_scan_by_timeout(dtimes_, freqs_, array_: Union[np.ndarray, Dict], timeout: dt.timedelta):
@@ -229,3 +238,42 @@ def plot_daily_coherence(scan: Optional[PassiveScan], tracks: List[PassiveTrack]
 
     save_name = 'coherence'
     fig.savefig(save_folder / save_name)
+
+
+@plot_languages()
+def plot_processed_tracks(track: SourceTrackInfo, save_folder: Path, colored=True,
+                          figsize=FIGSIZE_ONELONG, timeout=dt.timedelta(minutes=10), language=None):
+    time_marks = track.time_marks
+    spectra = track.spectra_central_track
+
+    channels = sorted(spectra)
+    spectra = [spectra[ch] for ch in channels]
+
+    res = _split_1d_by_timeout(time_marks, *spectra, timeout=timeout)
+    tm_split, spectra_split = res[0], res[1:]
+
+    color = 'C0' if colored else 'gray'
+
+    for ch, sp_split in zip(channels, spectra_split):
+        fig = plt.figure(figsize=figsize)
+        ax = plt.subplot(111)  # type: plt.Axes
+
+        for tm, sp in zip(tm_split, sp_split):
+            ax.plot(tm, sp, color=color)
+
+        PlotHelper.set_time_ticks(ax, with_date=True, minticks=10)
+
+        ax.set_xlim(time_marks[0], time_marks[-1])
+
+        xlabel_time = lang_string({'ru': 'Время, UT', 'en': 'Time, UT'}, language)
+        ax.set_xlabel(xlabel_time)
+
+        ylabel_time = lang_string({'ru': 'Мощность, отн.ед.', 'en': 'Power, rel.units'}, language)
+        ax.set_ylabel(ylabel_time)
+
+        fig.tight_layout()
+
+        save_name = f'track_spectra_{track.mode}_ch{ch}'
+        fig.savefig(save_folder / save_name)
+
+        plt.close(fig)
