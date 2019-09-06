@@ -236,7 +236,7 @@ def plot_daily_coherence(scan: Optional[PassiveScan], tracks: List[PassiveTrack]
 
     fig.tight_layout()
 
-    save_name = 'coherence'
+    save_name = 'coherence.png'
     fig.savefig(save_folder / save_name)
 
 
@@ -273,7 +273,7 @@ def plot_processed_tracks(track: SourceTrackInfo, save_folder: Path, colored=Tru
 
         fig.tight_layout()
 
-        save_name = f'track_spectra_{track.mode}_ch{ch}'
+        save_name = f'track_spectra_{track.mode.name}_ch{ch}.png'
         fig.savefig(save_folder / save_name)
 
         plt.close(fig)
