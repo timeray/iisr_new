@@ -23,7 +23,7 @@ class SourceTrackInfo:
 
     def save_pickle(self, data_manager: DataManager, subfolders: List[str] = None):
         dirpath = data_manager.get_postproc_folder_path(self.date, subfolders=subfolders)
-        filepath = dirpath / f'track_{self.mode}_wide.pkl'
+        filepath = dirpath / f'track_{self.mode.name}_wide.pkl'
         with open(str(filepath), 'wb') as file:
             pkl.dump(self, file)
 
