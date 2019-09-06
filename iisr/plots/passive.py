@@ -130,8 +130,6 @@ def plot_daily_spectra(scan: Optional[PassiveScan], tracks: List[PassiveTrack], 
     """
     Plot overall spectra for passive data.
     """
-    fig = plt.figure(figsize=figsize)
-
     # Store frequency and spectra arrays - they have different shape
     # for scan mode and for tracking mode
     dtimes, freqs, spectra = _prepare_scan_tracks_spectra(scan, tracks, decimation, timeout)
@@ -146,6 +144,7 @@ def plot_daily_spectra(scan: Optional[PassiveScan], tracks: List[PassiveTrack], 
         cmap = 'gray'
 
     for ch, spectrum in spectra.items():
+        fig = plt.figure(figsize=figsize)
         ax = plt.subplot(111)  # type: plt.Axes
 
         if level is None:
@@ -179,7 +178,7 @@ def plot_daily_spectra(scan: Optional[PassiveScan], tracks: List[PassiveTrack], 
         save_name = 'spectra_ch{}'.format(ch)
         fig.savefig(save_folder / save_name)
 
-        plt.clf()
+        plt.close(fig)
 
 
 @plot_languages()
@@ -238,6 +237,8 @@ def plot_daily_coherence(scan: Optional[PassiveScan], tracks: List[PassiveTrack]
 
     save_name = 'coherence.png'
     fig.savefig(save_folder / save_name)
+
+    plt.close(fig)
 
 
 @plot_languages()

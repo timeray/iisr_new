@@ -29,7 +29,8 @@ class DataManager:
     FIGURES_FOLDER_NAME = 'Figures'
     POSTPROCESSING_FOLDER_NAME = 'post_proc'
 
-    def __init__(self, main_folder_path: Path = CONFIG_MAIN_FOLDER):
+    def __init__(self, main_folder_path: Path = CONFIG_MAIN_FOLDER,
+                 create_main_folder: bool = True):
         """
 
         Args:
@@ -38,6 +39,8 @@ class DataManager:
         # Main folder is created on demand
         self.main_folder = main_folder_path
         self.created_folders = []  # type: List[Path]
+        if create_main_folder:
+            self._check_main_folder()
 
     def __enter__(self):
         return self
@@ -55,23 +58,29 @@ class DataManager:
         elif not self.main_folder.is_dir():
             raise NotADirectoryError('{}'.format(self.main_folder))
 
-    def get_preproc_folder_path(self, date: dt.date = None, subfolders: List[str] = None) -> Path:
+    def get_preproc_folder_path(self, date: dt.date = None, subfolders: List[str] = None,
+                                create_new_folders: bool = True) -> Path:
         if subfolders is None:
             subfolders = []
-        return self.get_folder_path(date, subfolders=[self.PREPROCESSING_FOLDER_NAME] + subfolders)
+        return self.get_folder_path(date, subfolders=[self.PREPROCESSING_FOLDER_NAME] + subfolders,
+                                    create_new_folders=create_new_folders)
 
-    def get_postproc_folder_path(self, date: dt.date = None, subfolders: List[str] = None) -> Path:
+    def get_postproc_folder_path(self, date: dt.date = None, subfolders: List[str] = None,
+                                 create_new_folders: bool = True) -> Path:
         if subfolders is None:
             subfolders = []
-        return self.get_folder_path(date, subfolders=[self.POSTPROCESSING_FOLDER_NAME] + subfolders)
+        return self.get_folder_path(date, subfolders=[self.POSTPROCESSING_FOLDER_NAME] + subfolders,
+                                    create_new_folders=create_new_folders)
 
-    def get_figures_folder_path(self, date: dt.date = None, subfolders: List[str] = None) -> Path:
+    def get_figures_folder_path(self, date: dt.date = None, subfolders: List[str] = None,
+                                create_new_folders: bool = True) -> Path:
         if subfolders is None:
             subfolders = []
-        return self.get_folder_path(date, subfolders=[self.FIGURES_FOLDER_NAME] + subfolders)
+        return self.get_folder_path(date, subfolders=[self.FIGURES_FOLDER_NAME] + subfolders,
+                                    create_new_folders=create_new_folders)
 
-    def get_folder_path(self, date: dt.date = None, subfolders: List[str] = None) -> Path:
-        self._check_main_folder()
+    def get_folder_path(self, date: dt.date = None, subfolders: List[str] = None,
+                        create_new_folders: bool = True) -> Path:
         path = self.main_folder
         if date is not None:
             date_str = date.strftime(DATE_FMT)
@@ -80,7 +89,7 @@ class DataManager:
         if subfolders:
             for folder in subfolders:
                 path /= folder
-        if not path.exists():
+        if not path.exists() and create_new_folders:
             path.mkdir(parents=True)
             self.created_folders.append(path)
         return path
@@ -90,8 +99,6 @@ class DataManager:
         return self.get_preproc_folder_path(date, subfolders) / filename
 
     def save_stdfile(self, stdfile: StdFile, filename: str, save_dir_suffix=''):
-        self._check_main_folder()
-
         save_dirname = 'std'
         if save_dir_suffix:
             save_dirname = save_dirname + '_' + save_dir_suffix
