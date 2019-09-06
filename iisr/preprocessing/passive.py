@@ -110,13 +110,14 @@ class PassiveTrackParameters(PassiveParameters):
 
 class PassiveResult(HandlerResult):
     mode_name = 'passive'
+    save_name_fmt = 'passive_{}_{}'
 
     def __init__(self, parameters: PassiveParameters):
         self.parameters = parameters
 
     @property
     def short_name(self):
-        return '{}_{}'.format(self.parameters.mode.name, self.parameters.band_type)
+        return self.save_name_fmt.format(self.parameters.mode.name, self.parameters.band_type)
 
     def save_txt(self, file: IO, save_date: dt.date = None):
         raise NotImplementedError
@@ -135,7 +136,7 @@ class PassiveResult(HandlerResult):
 
     def save_pickle(self, path_manager: DataManager, subfolders: List[str] = None):
         dirpath = path_manager.get_preproc_folder_path(date=self.dates[0], subfolders=subfolders)
-        with open(str(dirpath / ('passive_' + self.short_name + '.pkl')), 'wb') as file:
+        with open(str(dirpath / (self.short_name + '.pkl')), 'wb') as file:
             pkl.dump(self, file)
 
     @classmethod

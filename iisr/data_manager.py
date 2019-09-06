@@ -37,6 +37,17 @@ class DataManager:
         """
         # Main folder is created on demand
         self.main_folder = main_folder_path
+        self.created_folders = []  # type: List[Path]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        for folder in self.created_folders:
+            while folder.exists() and folder.is_dir() and not list(folder.glob('*')):
+                old_folder = folder
+                folder = folder.parent
+                old_folder.rmdir()
 
     def _check_main_folder(self):
         if not self.main_folder.exists():
@@ -71,6 +82,7 @@ class DataManager:
                 path /= folder
         if not path.exists():
             path.mkdir(parents=True)
+            self.created_folders.append(path)
         return path
 
     def get_file_path(self, filename: str, date: dt.date = None, subfolders: List[str] = None
@@ -89,73 +101,3 @@ class DataManager:
             dirpath.mkdir(parents=True)
 
         stdfile.to_file(dirpath / filename)
-
-    def save_preprocessing_result(self, result, save_dir_suffix='', save_format='txt'):
-        """Save first stage processing results."""
-        assert save_format in ['txt', 'pkl']
-
-        self._check_main_folder()
-
-        name = result.short_name
-
-        for result_date in result.dates:
-            date_str = result_date.strftime(DATE_FMT)
-            filename = result.mode_name + '_' + name + '.dat'
-            if save_dir_suffix:
-                save_dirname = self.PREPROCESSING_FOLDER_NAME + '_' + save_dir_suffix
-            else:
-                save_dirname = self.PREPROCESSING_FOLDER_NAME
-
-            dirpath = self.main_folder / date_str / save_dirname
-
-            if not dirpath.exists():
-                dirpath.mkdir(parents=True)
-
-            if save_format == 'txt':
-                with open(str(dirpath / filename), 'w') as file:  # type: IO
-                    result.save_txt(file, save_date=result_date)
-            else:
-                with open(str(dirpath / filename), 'wb') as file:
-                    result.save_pickle(file, save_date=result_date)
-
-    def save_postprocessing_results(self, results):
-        """
-        Save second stage processing results.
-
-        Parameters
-        ----------
-        results: SecondStageResults
-
-        Returns
-        -------
-        id: ID
-            Unique identifier of results.
-        """
-        self._check_main_folder()
-
-    def print_folders(self, file=sys.stdout):
-        """
-        Print main folder tree.
-
-        Parameters
-        ----------
-        file: stream, default sys.stdout
-            Stream to write.
-        """
-        step = '--'
-        starting_folder = self.main_folder
-        msg = [os.path.basename(starting_folder)]
-        nesting = [starting_folder]
-        walk = os.walk(starting_folder)
-        next(walk)  # skip starting folder
-        for dirpath, _, _ in walk:
-            basename = os.path.basename(dirpath)
-            line = []
-            while not dirpath.startswith(nesting[-1]):
-                nesting.pop()
-
-            line.append(step * len(nesting))
-            line.append(basename)
-            msg.append('> '.join(line))
-            nesting.append(dirpath)
-        print('\n'.join(msg), file=file)

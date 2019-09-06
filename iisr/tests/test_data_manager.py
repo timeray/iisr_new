@@ -23,7 +23,6 @@ class TestDataManager(TestCase):
         preproc_dir = DataManager.PREPROCESSING_FOLDER_NAME
         type(result).dates = mock.PropertyMock(return_value=[dtime])
         type(result).mode_name = mock.PropertyMock(return_value=mode_name)
-        type(result).short_name = mock.PropertyMock(return_value=short_name)
         result.save_txt.return_value = None
 
         with tempfile.TemporaryDirectory() as temp_dir_name:

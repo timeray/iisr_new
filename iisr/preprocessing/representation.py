@@ -76,11 +76,6 @@ class HandlerResult(metaclass=ABCMeta):
     dates = NotImplemented  # type: Union[List[dt.date], dt.date]
     mode_name = NotImplemented  # type: str
 
-    @property
-    @abstractmethod
-    def short_name(self) -> str:
-        pass
-
     @abstractmethod
     def save_txt(self, data_manager: DataManager):
         """Save results to file. If save_date is passed, save specific date."""

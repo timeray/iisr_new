@@ -5,3 +5,4 @@ __pycache__
 *.png
 pre_processing_config.ini
 /Debug/
+/post_processing_config.ini
