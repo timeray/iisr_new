@@ -16,7 +16,7 @@ def plot_spectra_and_coherence(date: dt.date, subfolder: str = '', decimation: i
         save_dir = manager.get_figures_folder_path(date)
 
         scan_filepath = data_dir / 'passive_scan_wide.pkl'
-        tracks_filepaths = [data_dir / f'passive_{mode}_wide.pkl' for mode in PassiveMode
+        tracks_filepaths = [data_dir / f'passive_{mode.name}_wide.pkl' for mode in PassiveMode
                             if mode != PassiveMode.scan]
 
         scan = PassiveScan.load_pickle(scan_filepath) if scan_filepath.exists() else None
@@ -38,7 +38,7 @@ def plot_processed_tracks(date: dt.date, subfolder: str = ''):
         data_dir = manager.get_postproc_folder_path(date, subfolders=[subfolder])
         save_dir = manager.get_figures_folder_path(date, subfolders=['Track'])
 
-        tracks_filepaths = [data_dir / f'track_{mode}_wide.pkl' for mode in PassiveMode
+        tracks_filepaths = [data_dir / f'track_{mode.name}_wide.pkl' for mode in PassiveMode
                             if mode != PassiveMode.scan]
         tracks = [SourceTrackInfo.load_pickle(filepath) for filepath in tracks_filepaths
                   if filepath.exists()]
