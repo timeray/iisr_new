@@ -306,11 +306,11 @@ class PassiveHandler(Handler):
         fft1 = fft[self.channels[0]]
         fft2 = fft[self.channels[1]]
 
-        power_spectra1 = power_spectra[self.channels[0]] * scale
-        power_spectra2 = power_spectra[self.channels[1]] * scale
+        power_spectra1 = power_spectra[self.channels[0]]
+        power_spectra2 = power_spectra[self.channels[1]]
 
         cross_spectra = fft1 * fft2.conj()
-        cross_spectra_mean = uneven_mean(normalized_time, cross_spectra, axis=0)
+        cross_spectra_mean = uneven_mean(normalized_time, cross_spectra, axis=0) / scale
 
         return cross_spectra_mean / np.sqrt(power_spectra1 * power_spectra2)
 
