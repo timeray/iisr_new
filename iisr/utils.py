@@ -62,12 +62,16 @@ def uneven_mean(x: np.ndarray, y: np.ndarray, axis: int = -1, method: str = 'tra
         mean: Mean.
 
     """
+    if x.size == 1:
+        return y.squeeze().item()
+
     if method == 'trapz':
-        return trapz(y, x, axis=axis)
+        integral = trapz(y, x, axis=axis)
     elif method == 'simps':
-        return simps(y, x, axis=axis)
+        integral = simps(y, x, axis=axis)
     else:
         raise ValueError(f'Unknown method: {method}')
+    return integral / (x[-1] - x[0])
 
 
 def central_time(dtimes: Sequence[dt.datetime]) -> dt.datetime:
