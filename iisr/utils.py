@@ -63,7 +63,7 @@ def uneven_mean(x: np.ndarray, y: np.ndarray, axis: int = -1, method: str = 'tra
 
     """
     if x.size == 1:
-        return y.squeeze().item()
+        return y.item()
 
     if method == 'trapz':
         integral = trapz(y, x, axis=axis)
