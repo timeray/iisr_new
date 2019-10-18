@@ -1,8 +1,12 @@
 output
 __pycache__
+
 *.mp4
 *.avi
 *.png
-pre_processing_config.ini
+
 /Debug/
-/post_processing_config.ini
+
+pre_processing_config.ini
+post_processing_config.ini
+ddc4_tests_config.ini
