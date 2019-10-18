@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import BinaryIO, Dict
 from iisr.utils import uneven_mean
 from configparser import ConfigParser
+from iisr.antenna.sky_noise import SkyNoiseInterpolator
 import datetime as dt
 import numpy as np
 
@@ -24,6 +25,10 @@ assert 'output_dirname' in cfg_parser[COMMON_SECTION]
 DATA_DIR = Path(cfg_parser[COMMON_SECTION]['data_dirpath'])
 
 
+class FileEndReached(RuntimeError):
+    pass
+
+
 def read_n_samples(stream: BinaryIO, n_samples: int, n_channels: int) -> Dict[int, np.ndarray]:
     assert n_channels > 0
     types_list = []
@@ -34,6 +39,8 @@ def read_n_samples(stream: BinaryIO, n_samples: int, n_channels: int) -> Dict[in
     dtype = np.dtype(types_list)
 
     quadratures = np.fromfile(stream, dtype=dtype, count=n_samples)
+    if quadratures.size != n_samples:
+        raise FileEndReached()
 
     res_dict = {}
     for ch in range(n_channels):
@@ -54,13 +61,40 @@ def calc_power_spectra(x, fft):
     return power_spectra
 
 
+def parse_parameters(filepath: Path) -> Dict:
+    convertors = {
+        'NUMBER_OF_CHANNELS': lambda x: int(x) // 2,
+        'NUMBER_OF_SAMPLES': int,
+        'SAMPLING_RATE': float,
+        'SHIFT_FREQUENCY': float,
+    }
+
+    res = {}
+    with open(str(filepath)) as file:
+        for line in file:
+            line = line.strip().split()
+            if line:
+                name, value = line
+                name = name.rstrip('_')
+
+                if name not in convertors:
+                    continue
+
+                if value.endswith(','):
+                    value = value.split(',')[0]
+                res[name] = convertors[name](value)
+    return res
+
+
 def plot_spectra(dtimes, freqs, spectra_ch1, spectra_ch3):
-    # plt.figure(figsize=(10, 7))
-    # plt.subplot(121)
-    # plt.plot(freqs, spectra_ch1.T)
-    # plt.subplot(122)
-    # plt.plot(freqs, spectra_ch3.T)
-    # plt.show()
+    plt.figure(figsize=(10, 7))
+    plt.subplot(131)
+    plt.plot(freqs, spectra_ch1.T)
+    plt.subplot(132)
+    plt.plot(freqs, spectra_ch3.T)
+    plt.subplot(133)
+    plt.plot(freqs, spectra_ch1.T / spectra_ch3.T)
+    plt.show()
 
     plt.figure(figsize=(10, 7))
     level = PlotHelper.autolevel(np.concatenate([spectra_ch1.ravel(),
@@ -82,38 +116,61 @@ def plot_spectra(dtimes, freqs, spectra_ch1, spectra_ch3):
 
 
 def main():
-    filename = '20191016_051053_DDC4.bin'
+    # filename = '20191016_051053_DDC4.bin'
+    filename = '20191018_093003_DDC4.bin'
+
+    filepath = DATA_DIR / filename
+
+    params = parse_parameters(filepath.with_suffix('.par'))
+
     start_time = dt.datetime(2019, 10, 16, 5, 10, 53)
-    sampling_frequency = 5e6
+    sampling_frequency = params['SAMPLING_RATE']
     sampling_period = 1 / sampling_frequency
-    central_freq = 158e6
-    n_channels = 2
+    central_freq = params['SHIFT_FREQUENCY']
+    n_channels = params['NUMBER_OF_CHANNELS']
 
     filter_threshold = 5.0
     outlier_max_rate = 0.01
 
     n_fft = 1024
     n_acc = 1000
-    n_sp = 100
+    n_sp = 1
 
     n_samples = n_fft * n_acc
 
     filt = MedianAdAroundMedianFilter(filter_threshold)
+    sky_noise_interps = {horn: SkyNoiseInterpolator(horn) for horn in ['upper', 'lower']}
 
     freqs = central_freq + np.fft.fftfreq(n=n_fft, d=sampling_period)
     freqs = np.fft.fftshift(freqs)
     k_sp = 0
 
-    filepath = DATA_DIR / filename
     with open(str(filepath), 'rb') as file:
         sp = {ch: [] for ch in range(n_channels)}
+        sky_noise = {ch: [] for ch in range(n_channels)}
         dtimes = []
         while True:
-            quads_dict = read_n_samples(file, n_samples, n_channels)
-            elapsed_seconds = k_sp * n_samples * sampling_period
-            dtimes.append(start_time + dt.timedelta(seconds=elapsed_seconds))
+            try:
+                quads_dict = read_n_samples(file, n_samples, n_channels)
+            except FileEndReached:
+                break
+
+            elapsed_seconds = k_sp * n_samples * 0.000003886  # * sampling_frequency
+            dtime = start_time + dt.timedelta(seconds=elapsed_seconds)
+            dtimes.append(dtime)
 
             for ch, quads in quads_dict.items():
+                horn = 'upper' if ch == 0 or ch == 1 else 'lower'
+
+                sky_noise_freq_slice = []
+                for freq in freqs:
+                    freq_megahertz = freq / 1e6
+
+                    sky_noise_freq_slice.append(
+                        sky_noise_interps[horn].get_sky_temperature(dtime, freq_megahertz)
+                    )
+                sky_noise[ch].append(np.array(sky_noise_freq_slice))
+
                 mask = filt(quads.real).mask | filt(quads.imag).mask
                 mask = mask.reshape((n_acc, n_fft))
 
@@ -143,7 +200,9 @@ def main():
 
             k_sp += 1
             if k_sp == n_sp:
-                plot_spectra(dtimes, freqs, np.array(sp[0]), np.array(sp[1]))
+                plot_spectra(dtimes, freqs, np.array(sp[0]), np.array(sky_noise[0]))
+
+    print('Processing finished')
 
 
 if __name__ == '__main__':

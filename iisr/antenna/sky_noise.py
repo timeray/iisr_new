@@ -5,7 +5,7 @@ file DNR_AllFreqs.dat and take into account radar antenna pattern.
 
 Create SkyNoiseIISR instance and use get_sky_temperature(dtime, freq) method.
 """
-__all__ = ['SkyNoiseIISR']
+__all__ = ['SkyNoiseInterpolator']
 # reference date: 1.1.2015
 import os
 from datetime import datetime, timedelta
@@ -37,7 +37,7 @@ def read_noise(filename):
     return time, freq, temp
 
 
-class SkyNoiseIISR:
+class SkyNoiseInterpolator:
     """
     Interpolate sky noise temperatures for IISR.
     
