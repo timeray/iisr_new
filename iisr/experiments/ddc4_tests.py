@@ -198,6 +198,8 @@ def plot_fitting(save_name, freqs, noise_temp, output_power, gain, bias,
         y = g * (x + b)
         plt.plot(x, y, color='C1')
 
+        plt.ylim(y[0] * 0.9, y[-1] * 1.1)
+
     out_dir = OUTPUT_DIR / save_dir
     if not out_dir.exists():
         out_dir.mkdir()
@@ -339,8 +341,8 @@ def make_spectra(filename,
                 new_quads *= hann(n_fft)
             fft = np.fft.fftshift(np.fft.fft(new_quads, axis=1))
 
-            pws = calc_power_spectra(x, fft)
-            pws /= ADC_INPUT_RESISTANCE
+            pws = calc_power_spectra(x, fft)  # Volts^2
+            pws /= ADC_INPUT_RESISTANCE  # Watts
             sp[ch].append(pws)
             # plt.plot(freqs, pws)
             # plt.title(f'Channel {ch}')
@@ -410,37 +412,37 @@ def make_all_spectra(filt=None):
     # f1.4,f2 for measurements of noise generator with noise figure F = 1.4, 2
     # f0 when noise generator does not include additional noise (F = 1)
     filenames = OrderedDict([
-        ('noise/20191021_124746_DDC4.bin', ('158_sync_upp_50Ohm_mini_circuits', (0, 0.4), (-40, 0))),
-        ('noise/20191021_130607_DDC4.bin', ('158_sync_upp_f0.0', (0, 0.4), (-40, 0))),
-        ('noise/20191021_130821_DDC4.bin', ('158_sync_upp_f1.4', (0, 0.4), (-40, 0))),
-        ('noise/20191021_131028_DDC4.bin', ('158_sync_upp_f2.0', (0, 0.4), (-40, 0))),
-        ('noise/20191021_132113_DDC4.bin', ('20_sync_upp_f0.0', None, (-40, 20))),
-        ('noise/20191021_132448_DDC4.bin', ('20_sync_upp_f1.4', None, (-40, 20))),
-        ('noise/20191021_132714_DDC4.bin', ('20_sync_upp_f2.0', None, (-40, 20))),
-        ('noise/20191021_133444_DDC4.bin', ('20_sync_low_f0.0', None, (-40, 20))),
-        ('noise/20191021_133718_DDC4.bin', ('20_sync_low_f1.4', None, (-40, 20))),
-        ('noise/20191021_133931_DDC4.bin', ('20_sync_low_f2.0', None, (-40, 20))),
-        ('passive2/20191022_103907_DDC4.bin', ('156_cyg', (0, 0.4), None)),
-        ('passive2/20191022_104918_DDC4.bin', ('156_cyg', (0, 0.4), None)),
-        ('passive2/20191022_110044_DDC4.bin', ('156_cyg', (0, 0.4), None)),
-        ('passive2/20191022_111217_DDC4.bin', ('156_cyg', (0, 0.4), None)),
-        ('passive2/20191022_112406_DDC4.bin', ('156_cyg', (0, 0.4), None)),
-        ('passive2/20191022_113548_DDC4.bin', ('156_cyg', (0, 0.4), None)),
-        ('passive2/20191022_114745_DDC4.bin', ('156_cyg', (0, 0.4), None)),
-        ('passive2/20191022_120401_DDC4.bin', ('156_cyg', (0, 0.4), None)),
+        ('noise/20191021_124746_DDC4.bin', ('158_sync_upp_50Ohm_mini_circuits', None, (-130, -90))),
+        ('noise/20191021_130607_DDC4.bin', ('158_sync_upp_f0.0', None, (-130, -90))),
+        ('noise/20191021_130821_DDC4.bin', ('158_sync_upp_f1.4', None, (-130, -90))),
+        ('noise/20191021_131028_DDC4.bin', ('158_sync_upp_f2.0', None, (-130, -90))),
+        ('noise/20191021_132113_DDC4.bin', ('20_sync_upp_f0.0', None, (-130, -70))),
+        ('noise/20191021_132448_DDC4.bin', ('20_sync_upp_f1.4', None, (-130, -70))),
+        ('noise/20191021_132714_DDC4.bin', ('20_sync_upp_f2.0', None, (-130, -70))),
+        ('noise/20191021_133444_DDC4.bin', ('20_sync_low_f0.0', None, (-130, -70))),
+        ('noise/20191021_133718_DDC4.bin', ('20_sync_low_f1.4', None, (-130, -70))),
+        ('noise/20191021_133931_DDC4.bin', ('20_sync_low_f2.0', None, (-130, -70))),
+        ('passive2/20191022_103907_DDC4.bin', ('156_cyg', None, None)),
+        ('passive2/20191022_104918_DDC4.bin', ('156_cyg', None, None)),
+        ('passive2/20191022_110044_DDC4.bin', ('156_cyg', None, None)),
+        ('passive2/20191022_111217_DDC4.bin', ('156_cyg', None, None)),
+        ('passive2/20191022_112406_DDC4.bin', ('156_cyg', None, None)),
+        ('passive2/20191022_113548_DDC4.bin', ('156_cyg', None, None)),
+        ('passive2/20191022_114745_DDC4.bin', ('156_cyg', None, None)),
+        ('passive2/20191022_120401_DDC4.bin', ('156_cyg', None, None)),
         # main room
-        ('noise2/20191022_183506_DDC4.bin', ('158_sync_nocable_filt_f0.0', None, (-20, 20))),
-        ('noise2/20191022_183705_DDC4.bin', ('158_sync_nocable_filt_f1.4', None, (-20, 20))),
-        ('noise2/20191022_183838_DDC4.bin', ('158_sync_nocable_filt_f2.0', None, (-20, 20))),
+        ('noise2/20191022_183506_DDC4.bin', ('158_sync_nocable_filt_f0.0', None, (-110, -70))),
+        ('noise2/20191022_183705_DDC4.bin', ('158_sync_nocable_filt_f1.4', None, (-110, -70))),
+        ('noise2/20191022_183838_DDC4.bin', ('158_sync_nocable_filt_f2.0', None, (-110, -70))),
         # shielded room
-        ('noise3/20191023_023110_DDC4.bin', ('158_shield_nocable_arr_filt_f0.0', None, (-20, 20))),
-        ('noise3/20191023_023206_DDC4.bin', ('158_shield_nocable_arr_filt_f1.4', None, (-20, 20))),
-        ('noise3/20191023_023249_DDC4.bin', ('158_shield_nocable_arr_filt_f2.0', None, (-20, 20))),
-        ('noise3/20191023_023339_DDC4.bin', ('158_shield_nocable_arr_filt_f4.0', None, (-20, 20))),
-        ('noise3/20191023_030026_DDC4.bin', ('158_shield_nocable_filt_arr_f0.0', None, (-20, 20))),
-        ('noise3/20191023_030127_DDC4.bin', ('158_shield_nocable_filt_arr_f1.4', None, (-20, 20))),
-        ('noise3/20191023_030207_DDC4.bin', ('158_shield_nocable_filt_arr_f2.0', None, (-20, 20))),
-        ('noise3/20191023_030250_DDC4.bin', ('158_shield_nocable_filt_arr_f4.0', None, (-20, 20))),
+        ('noise3/20191023_023110_DDC4.bin', ('158_shield_nocable_arr_filt_f0.0', None, (-110, -70))),
+        ('noise3/20191023_023206_DDC4.bin', ('158_shield_nocable_arr_filt_f1.4', None, (-110, -70))),
+        ('noise3/20191023_023249_DDC4.bin', ('158_shield_nocable_arr_filt_f2.0', None, (-110, -70))),
+        ('noise3/20191023_023339_DDC4.bin', ('158_shield_nocable_arr_filt_f4.0', None, (-110, -70))),
+        ('noise3/20191023_030026_DDC4.bin', ('158_shield_nocable_filt_arr_f0.0', None, (-110, -70))),
+        ('noise3/20191023_030127_DDC4.bin', ('158_shield_nocable_filt_arr_f1.4', None, (-110, -70))),
+        ('noise3/20191023_030207_DDC4.bin', ('158_shield_nocable_filt_arr_f2.0', None, (-110, -70))),
+        ('noise3/20191023_030250_DDC4.bin', ('158_shield_nocable_filt_arr_f4.0', None, (-110, -70))),
     ])
 
     for filename, (descr, ylim_lin, ylim_log) in filenames.items():
