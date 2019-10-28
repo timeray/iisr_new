@@ -218,6 +218,7 @@ def plot_gain_bias(save_name, freqs, gain, bias, save_dir='Calibration'):
     plt.ylim(0, PlotHelper.autolevel(gain)[1] * 1.4)
     plt.xticks([])
     plt.ylabel('Усиление')
+    plt.gca().ticklabel_format(axis='y', style='sci', scilimits=(0, 0))
 
     plt.subplot(212)
     plt.plot(freqs, bias)
