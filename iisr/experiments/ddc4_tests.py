@@ -18,6 +18,7 @@ DTIME_FMT = '%Y%m%d_%H%M%S'
 ADC_MAX_VOLTAGE = 1.0
 ADC_BITS = 16
 ADC_VOLTS_PER_BIT = ADC_MAX_VOLTAGE / (2 ** (ADC_BITS - 1))
+ADC_INPUT_RESISTANCE = 50
 
 # Config parsing
 cfg_parser = ConfigParser()
@@ -318,6 +319,7 @@ def make_spectra(filename,
     generator = take_quadratures(filepath, n_samples, n_channels, skip_n_samples)
     for i, quads_dict in enumerate(generator):
         for ch, quads in quads_dict.items():
+            quads *= ADC_VOLTS_PER_BIT  # quadratures to voltage
             new_quads = quads.reshape((n_acc, n_fft))
             if filt is not None:
                 x, new_quads = filt(new_quads)
@@ -337,6 +339,7 @@ def make_spectra(filename,
             fft = np.fft.fftshift(np.fft.fft(new_quads, axis=1))
 
             pws = calc_power_spectra(x, fft)
+            pws /= ADC_INPUT_RESISTANCE
             sp[ch].append(pws)
             # plt.plot(freqs, pws)
             # plt.title(f'Channel {ch}')
