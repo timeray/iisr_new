@@ -635,9 +635,9 @@ class PassiveSupervisor(Supervisor):
         acc_marks = self._buffer[0]
         # Check if number time marks for given frequency reached n_accumulation
         if len(acc_marks[frequency]) > self.n_accumulation:
-            logging.warn(f'Number of quadratures for {frequency} at time {package.time_mark} '
-                         f'exceeded number of accumulated samples - maybe quadratures for some '
-                         f'frequency were missed. Buffer will be reset.')
+            logging.warning(f'Number of quadratures for {frequency} at time {package.time_mark} '
+                            f'exceeded number of accumulated samples - maybe quadratures for some '
+                            f'frequency were missed. Buffer will be reset.')
             self._buffer = _get_new_buffer()
 
         quads1 = package.time_series_list[0].quadratures.reshape(-1, self.n_fft)
