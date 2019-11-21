@@ -686,14 +686,7 @@ class ActiveHandler(Handler):
 
         # copy quadratures for debugging, can be remove later
         quads_work = quadratures.copy()
-
-        if self.active_parameters.frequency['MHz'] > 159:
-            # Clutter at frequencies > 159 is stronger and its phase is more expressed.
-            # In this case we are able to align phases of all series
-            quads_work *= np.exp(1j * corr_phase[:, None])
-        else:
-            # Otherwise, phase is much noisier and alignment may degrade results
-            pass
+        quads_work *= np.exp(1j * corr_phase[:, None])
 
         corr_mod = np.abs(best_corr)
 
@@ -718,7 +711,8 @@ class ActiveHandler(Handler):
 
         dropped_quads = clutter_window * self.n_clutter_subtract_iter / quads_work.shape[0] * 100
         if dropped_quads > 20:
-            logging.WARN('Number of dropped quadratures during clutter estimation will exceed 20%')
+            logging.warning('Number of dropped quadratures during '
+                            'clutter estimation will exceed 20%')
         n_samples = quads_work.shape[1]
         tmp_quads = quads_work
         for _ in range(self.n_clutter_subtract_iter):
@@ -751,8 +745,14 @@ class ActiveHandler(Handler):
                     quads_work, shape=strided_shape, strides=new_strides
                 ).mean(axis=1)
                 clutter = np.array(clutter_estimate[0], dtype=complex)
+
+                # clutter_norm = (np.abs(clutter_estimate[:, dist_mask]) ** 2).sum(axis=1)
+                # amplitude_drift = (quads_work[clutter_window:, dist_mask]
+                #                    * clutter_estimate[:, dist_mask].conj()) .sum(axis=1)\
+                #                   / clutter_norm
+
                 # Subtract clutter, starting from clutter_estimate_window
-                tmp_quads = quads_work[clutter_window:] - clutter_estimate
+                tmp_quads = quads_work[clutter_window:] - clutter_estimate # / amplitude_drift[:, None]
                 quads_work = quads_work[clutter_window:]
 
         # Logging messages
@@ -1084,12 +1084,15 @@ class ActiveSupervisor(Supervisor):
         timeout_coroutine = timeout_filter(self.timeout)
         next(timeout_coroutine)  # Init coroutine
 
-        buffer = new_buffer()
+        buffer = None
+        current_date = None
         for package in packages:
+            date = package.time_mark.date()
             # Check timeout
-            if timeout_coroutine.send(package):
+            if buffer is None or timeout_coroutine.send(package) or date != current_date:
                 # Reset buffer
                 buffer = new_buffer()
+                current_date = date
 
             for series in package.time_series_list:
                 global_parameters = series.parameters.global_parameters
@@ -1146,7 +1149,7 @@ class ActiveSupervisor(Supervisor):
                 )
 
                 del buffer[unique_params]
-                yield active_params, ActiveBatch(time_marks, quadratures)
+                yield current_date, active_params, ActiveBatch(time_marks, quadratures)
 
     def init_handler(self, parameters: ActiveParameters):
         if parameters.pulse_type == 'short':
