@@ -7,6 +7,7 @@ import numpy as np
 from scipy import signal
 from typing import List, TextIO, Dict, Sequence, Tuple, Generator, Iterator, Any, BinaryIO
 
+from iisr.data_manager import DataManager
 from iisr.iisr_io import ExperimentParameters, TimeSeriesPackage
 from iisr.preprocessing.representation import HandlerResult, Handler, HandlerParameters, \
     Supervisor, timeout_filter, HandlerBatch
@@ -265,9 +266,12 @@ class ActiveResult(HandlerResult):
 
     @property
     def short_name(self) -> str:
-        return 'ch({})_freq{:.2f}_len{}'.format(','.join((str(ch) for ch in self.channels)),
-                                                self.frequency['MHz'],
-                                                self.pulse_length['us'])
+        return '{}_ch({})_freq{:.2f}_len{}'.format(
+            self.mode_name,
+            ','.join((str(ch) for ch in self.channels)),
+            self.frequency['MHz'],
+            self.pulse_length['us']
+        )
 
     def __getattr__(self, item):
         if item in self.__dict__:
@@ -342,25 +346,17 @@ class ActiveResult(HandlerResult):
         for row in zip(*columns):
             file.write(sep.join(row) + '\n')
 
-    def save_txt(self, file: TextIO, save_date: date = None, save_params: bool = True,
-                 sep: str = ' ', precision=5):
-        """Save results to specific directory. If date was passed, save only results corresponding
-        to this date.
+    def save_txt(self, path_manager: DataManager, subfolders: List[str] = None,
+                 save_params: bool = True, sep: str = ' ', precision=5):
+        for date in self.dates:
+            dirpath = path_manager.get_preproc_folder_path(date=date, subfolders=subfolders)
+            filepath = str(dirpath / (self.short_name + '.dat'))
+            logging.info(f'Saving results to {filepath}')
+            with open(filepath, 'w') as file:
+                if save_params:
+                    self.parameters.save_txt(file)
 
-        Args:
-            file: File.
-            save_date: Date to save.
-            save_params: If params should be saved as a header.
-            sep: Separator between columns in the file.
-            precision: Precision of saved float numbers.
-        """
-        if save_params:
-            self.parameters.save_txt(file)
-
-        if save_date is not None and save_date not in self.dates:
-            raise ValueError('Not results for given date {}'.format(save_date))
-
-        self._write_results(file, save_date=save_date, sep=sep, precision=precision)
+                self._write_results(file, save_date=date, sep=sep, precision=precision)
 
     def to_std(self, save_date: date = None,
                clutter_cutoff_dist: int = 150) -> Dict[Channel, StdFile]:

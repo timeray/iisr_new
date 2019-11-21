@@ -274,6 +274,9 @@ class Supervisor(metaclass=ABCMeta):
             if out_fmt == 'pkl':
                 for result in results:
                     result.save_pickle(data_manager, subfolders)
+            elif out_fmt == 'txt':
+                for result in results:
+                    result.save_txt(data_manager, subfolders)
             elif out_fmt == 'std':
                 _merge_and_save_stdfiles(results, data_manager)
             else:
