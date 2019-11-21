@@ -4,10 +4,12 @@ from iisr.filtering import MedianAdAroundMedianFilter
 from pathlib import Path
 from typing import BinaryIO, Dict
 from iisr.utils import uneven_mean
+from iisr.preprocessing.active import square_barker
 from configparser import ConfigParser
 from collections import OrderedDict, namedtuple
 from scipy.constants import Boltzmann
 from scipy.signal.windows import hann
+from scipy import signal
 import datetime as dt
 import numpy as np
 
@@ -120,11 +122,14 @@ def plot_spectra_1d(save_name, freqs, spectra_ch1, spectra_ch3=None, log_scale=F
         spectra_ch1 = 10 * np.log10(spectra_ch1)  # type: np.ndarray
         if spectra_ch3 is not None:
             spectra_ch3 = 10 * np.log10(spectra_ch3)  # type: np.ndarray
-        ylim = (-40, 20) if ylim is None else ylim
+        if ylim is None:
+            ylim = PlotHelper.autolevel(spectra_ch1)
+            ylim = (ylim[0], ylim[1] * 0.8)
     else:
         # ylabel = 'Power, rel.u.'
         ylabel = 'Мощность, отн.ед.'
-        ylim = (0, PlotHelper.autolevel(spectra_ch1)[1] * 1.2) if ylim is None else ylim
+        if ylim is None:
+            ylim = (0, PlotHelper.autolevel(spectra_ch1)[1] * 1.2)
 
     freqs_megahertz = freqs / 1e6
 
@@ -230,7 +235,7 @@ def plot_gain_bias(save_name, freqs, gain, bias, save_dir='Calibration'):
     plt.xlabel('Частота, МГц')
     plt.ylabel(r'$T_ш$, К')
     plt.xlim(freqs[0], freqs[-1])
-    plt.ylim(0, 600)
+    plt.ylim(0, 75)
 
     out_dir = OUTPUT_DIR / save_dir
     if not out_dir.exists():
@@ -242,7 +247,7 @@ def plot_gain_bias(save_name, freqs, gain, bias, save_dir='Calibration'):
 
 
 DDCParams = namedtuple('DDCParams', ['start_time', 'sampling_frequency', 'sampling_period',
-                                     'central_freq', 'n_channels'])
+                                     'central_freq', 'n_channels', 'n_samples'])
 
 
 def parse_parameters(filepath: Path) -> DDCParams:
@@ -253,7 +258,9 @@ def parse_parameters(filepath: Path) -> DDCParams:
     sampling_period = 1 / sampling_frequency
     central_freq = params['SHIFT_FREQUENCY']
     n_channels = params['NUMBER_OF_CHANNELS']
-    return DDCParams(start_time, sampling_frequency, sampling_period, central_freq, n_channels)
+    n_samples = params['NUMBER_OF_SAMPLES']
+    return DDCParams(start_time, sampling_frequency, sampling_period, central_freq, n_channels,
+                     n_samples)
 
 
 def take_quadratures(filepath: Path, n_samples: int, n_channels: int, skip_n_samples: int):
@@ -370,7 +377,7 @@ def perform_calibration(description, filepaths: Dict[str, float], filt=None, n_f
     noise_temperatures = []
     for filepath, noise_temp in filepaths.items():
         params, fr, sp_ch1, sp_ch2 = make_spectra(
-            DATA_DIR / filepath, filt=filt, n_fft=n_fft, n_acc=n_acc, n_sp=3,
+            DATA_DIR / filepath, filt=filt, n_fft=n_fft, n_acc=n_acc, n_sp=N_SPECTRA,
             skip_n_samples=skip_n_samples
         )
         assert sp_ch2 is None
@@ -412,37 +419,67 @@ def make_all_spectra(filt=None):
     # f1.4,f2 for measurements of noise generator with noise figure F = 1.4, 2
     # f0 when noise generator does not include additional noise (F = 1)
     filenames = OrderedDict([
-        ('noise/20191021_124746_DDC4.bin', ('158_sync_upp_50Ohm_mini_circuits', None, (-140, -110))),
-        ('noise/20191021_130607_DDC4.bin', ('158_sync_upp_f0.0', None, (-140, -110))),
-        ('noise/20191021_130821_DDC4.bin', ('158_sync_upp_f1.4', None, (-140, -110))),
-        ('noise/20191021_131028_DDC4.bin', ('158_sync_upp_f2.0', None, (-140, -110))),
-        ('noise/20191021_132113_DDC4.bin', ('20_sync_upp_f0.0', None, (-150, -90))),
-        ('noise/20191021_132448_DDC4.bin', ('20_sync_upp_f1.4', None, (-150, -90))),
-        ('noise/20191021_132714_DDC4.bin', ('20_sync_upp_f2.0', None, (-150, -90))),
-        ('noise/20191021_133444_DDC4.bin', ('20_sync_low_f0.0', None, (-150, -90))),
-        ('noise/20191021_133718_DDC4.bin', ('20_sync_low_f1.4', None, (-150, -90))),
-        ('noise/20191021_133931_DDC4.bin', ('20_sync_low_f2.0', None, (-150, -90))),
-        ('passive2/20191022_103907_DDC4.bin', ('156_cyg', None, None)),
-        ('passive2/20191022_104918_DDC4.bin', ('156_cyg', None, None)),
-        ('passive2/20191022_110044_DDC4.bin', ('156_cyg', None, None)),
-        ('passive2/20191022_111217_DDC4.bin', ('156_cyg', None, None)),
-        ('passive2/20191022_112406_DDC4.bin', ('156_cyg', None, None)),
-        ('passive2/20191022_113548_DDC4.bin', ('156_cyg', None, None)),
-        ('passive2/20191022_114745_DDC4.bin', ('156_cyg', None, None)),
-        ('passive2/20191022_120401_DDC4.bin', ('156_cyg', None, None)),
-        # main room
-        ('noise2/20191022_183506_DDC4.bin', ('158_sync_nocable_filt_f0.0', None, (-130, -90))),
-        ('noise2/20191022_183705_DDC4.bin', ('158_sync_nocable_filt_f1.4', None, (-130, -90))),
-        ('noise2/20191022_183838_DDC4.bin', ('158_sync_nocable_filt_f2.0', None, (-130, -90))),
-        # shielded room
-        ('noise3/20191023_023110_DDC4.bin', ('158_shield_nocable_arr_filt_f0.0', None, (-130, -90))),
-        ('noise3/20191023_023206_DDC4.bin', ('158_shield_nocable_arr_filt_f1.4', None, (-130, -90))),
-        ('noise3/20191023_023249_DDC4.bin', ('158_shield_nocable_arr_filt_f2.0', None, (-130, -90))),
-        ('noise3/20191023_023339_DDC4.bin', ('158_shield_nocable_arr_filt_f4.0', None, (-130, -90))),
-        ('noise3/20191023_030026_DDC4.bin', ('158_shield_nocable_filt_arr_f0.0', None, (-130, -90))),
-        ('noise3/20191023_030127_DDC4.bin', ('158_shield_nocable_filt_arr_f1.4', None, (-130, -90))),
-        ('noise3/20191023_030207_DDC4.bin', ('158_shield_nocable_filt_arr_f2.0', None, (-130, -90))),
-        ('noise3/20191023_030250_DDC4.bin', ('158_shield_nocable_filt_arr_f4.0', None, (-130, -90))),
+        # ('noise/20191021_124746_DDC4.bin', ('158_sync_upp_50Ohm_mini_circuits', None, (-140, -110))),
+        # ('noise/20191021_130607_DDC4.bin', ('158_sync_upp_f0.0', None, (-140, -110))),
+        # ('noise/20191021_130821_DDC4.bin', ('158_sync_upp_f1.4', None, (-140, -110))),
+        # ('noise/20191021_131028_DDC4.bin', ('158_sync_upp_f2.0', None, (-140, -110))),
+        # ('noise/20191021_132113_DDC4.bin', ('20_sync_upp_f0.0', None, (-150, -90))),
+        # ('noise/20191021_132448_DDC4.bin', ('20_sync_upp_f1.4', None, (-150, -90))),
+        # ('noise/20191021_132714_DDC4.bin', ('20_sync_upp_f2.0', None, (-150, -90))),
+        # ('noise/20191021_133444_DDC4.bin', ('20_sync_low_f0.0', None, (-150, -90))),
+        # ('noise/20191021_133718_DDC4.bin', ('20_sync_low_f1.4', None, (-150, -90))),
+        # ('noise/20191021_133931_DDC4.bin', ('20_sync_low_f2.0', None, (-150, -90))),
+        # ('passive2/20191022_103907_DDC4.bin', ('156_cyg', None, None)),
+        # ('passive2/20191022_104918_DDC4.bin', ('156_cyg', None, None)),
+        # ('passive2/20191022_110044_DDC4.bin', ('156_cyg', None, None)),
+        # ('passive2/20191022_111217_DDC4.bin', ('156_cyg', None, None)),
+        # ('passive2/20191022_112406_DDC4.bin', ('156_cyg', None, None)),
+        # ('passive2/20191022_113548_DDC4.bin', ('156_cyg', None, None)),
+        # ('passive2/20191022_114745_DDC4.bin', ('156_cyg', None, None)),
+        # ('passive2/20191022_120401_DDC4.bin', ('156_cyg', None, None)),
+        # # main room
+        # ('noise2/20191022_183506_DDC4.bin', ('158_sync_nocable_filt_f0.0', None, (-130, -90))),
+        # ('noise2/20191022_183705_DDC4.bin', ('158_sync_nocable_filt_f1.4', None, (-130, -90))),
+        # ('noise2/20191022_183838_DDC4.bin', ('158_sync_nocable_filt_f2.0', None, (-130, -90))),
+        # # shielded room
+        # ('noise3/20191023_023110_DDC4.bin', ('158_shield_nocable_arr_filt_f0.0', None, (-130, -90))),
+        # ('noise3/20191023_023206_DDC4.bin', ('158_shield_nocable_arr_filt_f1.4', None, (-130, -90))),
+        # ('noise3/20191023_023249_DDC4.bin', ('158_shield_nocable_arr_filt_f2.0', None, (-130, -90))),
+        # ('noise3/20191023_023339_DDC4.bin', ('158_shield_nocable_arr_filt_f4.0', None, (-130, -90))),
+        # ('noise3/20191023_030026_DDC4.bin', ('158_shield_nocable_filt_arr_f0.0', None, (-130, -90))),
+        # ('noise3/20191023_030127_DDC4.bin', ('158_shield_nocable_filt_arr_f1.4', None, (-130, -90))),
+        # ('noise3/20191023_030207_DDC4.bin', ('158_shield_nocable_filt_arr_f2.0', None, (-130, -90))),
+        # ('noise3/20191023_030250_DDC4.bin', ('158_shield_nocable_filt_arr_f4.0', None, (-130, -90))),
+        # Home tests
+        # # Noise generator
+        # ('noise_home_tests/20191106_051552_DDC4.bin', ('158_home_ng1_off', None, None)),
+        # ('noise_home_tests/20191106_051500_DDC4.bin', ('158_home_ng1_on', None, None)),
+        # ('noise_home_tests/20191106_063906_DDC4.bin', ('158_home_ng2_off', None, None)),
+        # ('noise_home_tests/20191106_063937_DDC4.bin', ('158_home_ng2_on', None, None)),
+        # ('noise_home_tests/20191106_075704_DDC4.bin', ('158_home_ng3_off', None, None)),
+        # ('noise_home_tests/20191106_075801_DDC4.bin', ('158_home_ng3_on1', None, None)),
+        # ('noise_home_tests/20191106_080058_DDC4.bin', ('158_home_ng3_on2', None, None)),
+        # # Noise figure measurement device
+        # ('noise_home_tests/20191106_060710_DDC4.bin', ('158_home_fm1_off', None, None)),
+        # ('noise_home_tests/20191106_060807_DDC4.bin', ('158_home_fm1_on', None, None)),
+        # ('noise_home_tests/20191106_063807_DDC4.bin', ('158_home_fm2_off', None, None)),
+        # ('noise_home_tests/20191106_063829_DDC4.bin', ('158_home_fm2_on', None, None)),
+        # ('noise_home_tests/20191106_075553_DDC4.bin', ('158_home_fm3_off', None, None)),
+        # ('noise_home_tests/20191106_075620_DDC4.bin', ('158_home_fm3_on', None, None)),
+        # Noisy filter with F=3 (old technique measurement)
+        # ('noise_home_tests/20191106_083432_DDC4.bin', ('158_home_fm_noisy_off', None, None)),
+        # ('noise_home_tests/20191106_083500_DDC4.bin', ('158_home_fm_noisy_on', None, None)),
+        # Home - second day of measurements
+        ('noise_home_tests/20191107_021118_DDC4.bin', ('158_home_ng4_off', None, None)),
+        ('noise_home_tests/20191107_021141_DDC4.bin', ('158_home_ng4_on', None, None)),
+        ('noise_home_tests/20191107_021206_DDC4.bin', ('158_home_ng5_off', None, None)),
+        ('noise_home_tests/20191107_021226_DDC4.bin', ('158_home_ng5_on', None, None)),
+        ('noise_home_tests/20191107_021434_DDC4.bin', ('158_home_fm4_off', None, None)),
+        ('noise_home_tests/20191107_021500_DDC4.bin', ('158_home_fm4_on', None, None)),
+        ('noise_home_tests/20191107_021545_DDC4.bin', ('158_home_ng6_off', None, None)),
+        ('noise_home_tests/20191107_021603_DDC4.bin', ('158_home_ng6_on1', None, None)),
+        ('noise_home_tests/20191107_021649_DDC4.bin', ('158_home_fm5_off', None, None)),
+        ('noise_home_tests/20191107_021720_DDC4.bin', ('158_home_fm5_on', None, None)),
     ])
 
     for filename, (descr, ylim_lin, ylim_log) in filenames.items():
@@ -464,49 +501,197 @@ def perform_all_calibration(filt=None):
     temp_f2 = 870
     temp_f4 = 1450
 
+    noise_gen_enr = 6  # dB
+    temp_noise_gen = temp_off * (10 ** (noise_gen_enr / 10) + 1)  # ~1444 K
+
     calib_files = [
         # Tuple[description, Dict[filename, temperature]]
-        ('158_full', {
-             'noise/20191021_130607_DDC4.bin': temp_off,
-             'noise/20191021_130821_DDC4.bin': temp_f1_4,
-             'noise/20191021_131028_DDC4.bin': temp_f2,
-         }),
-        ('20_upp',
-         {
-             'noise/20191021_132113_DDC4.bin': temp_off,
-             'noise/20191021_132448_DDC4.bin': temp_f1_4,
-             'noise/20191021_132714_DDC4.bin': temp_f2,
-         }),
-        ('20_low',
-         {
-             'noise/20191021_133444_DDC4.bin': temp_off,
-             'noise/20191021_133718_DDC4.bin': temp_f1_4,
-             'noise/20191021_133931_DDC4.bin': temp_f2,
-         }),
-        ('158_nocable_arr_filt',
-         {
-             'noise3/20191023_023110_DDC4.bin': temp_off,
-             'noise3/20191023_023206_DDC4.bin': temp_f1_4,
-             'noise3/20191023_023249_DDC4.bin': temp_f2,
-             'noise3/20191023_023339_DDC4.bin': temp_f4,
-         }),
-        ('158_nocable_filt_arr',
-         {
-             'noise3/20191023_030026_DDC4.bin': temp_off,
-             'noise3/20191023_030127_DDC4.bin': temp_f1_4,
-             'noise3/20191023_030207_DDC4.bin': temp_f2,
-             'noise3/20191023_030250_DDC4.bin': temp_f4,
-         }),
+        # ('158_full', {
+        #      'noise/20191021_130607_DDC4.bin': temp_off,
+        #      'noise/20191021_130821_DDC4.bin': temp_f1_4,
+        #      'noise/20191021_131028_DDC4.bin': temp_f2,
+        #  }),
+        # ('20_upp',
+        #  {
+        #      'noise/20191021_132113_DDC4.bin': temp_off,
+        #      'noise/20191021_132448_DDC4.bin': temp_f1_4,
+        #      'noise/20191021_132714_DDC4.bin': temp_f2,
+        #  }),
+        # ('20_low',
+        #  {
+        #      'noise/20191021_133444_DDC4.bin': temp_off,
+        #      'noise/20191021_133718_DDC4.bin': temp_f1_4,
+        #      'noise/20191021_133931_DDC4.bin': temp_f2,
+        #  }),
+        # ('158_nocable_arr_filt',
+        #  {
+        #      'noise3/20191023_023110_DDC4.bin': temp_off,
+        #      'noise3/20191023_023206_DDC4.bin': temp_f1_4,
+        #      'noise3/20191023_023249_DDC4.bin': temp_f2,
+        #      'noise3/20191023_023339_DDC4.bin': temp_f4,
+        #  }),
+        # ('158_nocable_filt_arr',
+        #  {
+        #      'noise3/20191023_030026_DDC4.bin': temp_off,
+        #      'noise3/20191023_030127_DDC4.bin': temp_f1_4,
+        #      'noise3/20191023_030207_DDC4.bin': temp_f2,
+        #      'noise3/20191023_030250_DDC4.bin': temp_f4,
+        #  }),
+
+        # Home noise measurements
+        # ('158_home_noise_gen', {
+        #     'noise_home_tests/20191106_051552_DDC4.bin': temp_off,
+        #     'noise_home_tests/20191106_051500_DDC4.bin': temp_noise_gen,
+        # }),
+        # ('158_home_figure_measure', {
+        #     'noise_home_tests/20191106_060710_DDC4.bin': temp_off,
+        #     'noise_home_tests/20191106_060807_DDC4.bin': temp_f4,
+        # }),
+        # ('158_home_figure_measure2', {
+        #     'noise_home_tests/20191106_063807_DDC4.bin': temp_off,
+        #     'noise_home_tests/20191106_063829_DDC4.bin': temp_f4,
+        # }),
+        # ('158_home_noise_gen2', {
+        #     'noise_home_tests/20191106_063906_DDC4.bin': temp_off,
+        #     'noise_home_tests/20191106_063937_DDC4.bin': temp_noise_gen,
+        # }),
+        # ('158_home_figure_measure3', {
+        #     'noise_home_tests/20191106_075553_DDC4.bin': temp_off,
+        #     'noise_home_tests/20191106_075620_DDC4.bin': temp_f4,
+        # }),
+        # ('158_home_noise_gen3', {
+        #     'noise_home_tests/20191106_075704_DDC4.bin': temp_off,
+        #     'noise_home_tests/20191106_075801_DDC4.bin': temp_noise_gen,
+        #     'noise_home_tests/20191106_080058_DDC4.bin': temp_noise_gen,
+        # }),
+        # ('158_home_figure_measure_noisy', {
+        #     'noise_home_tests/20191106_083432_DDC4.bin': temp_off,
+        #     'noise_home_tests/20191106_083500_DDC4.bin': temp_f4,
+        # }),
+        ('158_home_noise_gen4', {
+            'noise_home_tests/20191107_021118_DDC4.bin': temp_off,
+            'noise_home_tests/20191107_021141_DDC4.bin': temp_noise_gen,
+        }),
+        ('158_home_noise_gen5', {
+            'noise_home_tests/20191107_021206_DDC4.bin': temp_off,
+            'noise_home_tests/20191107_021226_DDC4.bin': temp_noise_gen,
+        }),
+        ('158_home_figure_measure4', {
+            'noise_home_tests/20191107_021434_DDC4.bin': temp_off,
+            'noise_home_tests/20191107_021500_DDC4.bin': temp_f4,
+        }),
+        ('158_home_noise_gen6', {
+            'noise_home_tests/20191107_021545_DDC4.bin': temp_off,
+            'noise_home_tests/20191107_021603_DDC4.bin': temp_noise_gen,
+        }),
+        ('158_home_figure_measure5', {
+            'noise_home_tests/20191107_021649_DDC4.bin': temp_off,
+            'noise_home_tests/20191107_021720_DDC4.bin': temp_f4,
+        }),
     ]
+
     for descr, filepaths_dict in calib_files:
         perform_calibration(descr, filepaths_dict, filt=filt)
 
 
-if __name__ == '__main__':
+def passive_data_processing():
     quadratures_filter = QuadsFilter(
         hard_threshold=HARD_THRESHOLD,
         filter_threshold=FILTER_THRESHOLD,
         outlier_max_rate=OULIER_MAX_RATE,
     )
-    make_all_spectra(filt=quadratures_filter)
+    # make_all_spectra(filt=quadratures_filter)
     perform_all_calibration(filt=quadratures_filter)
+
+
+def active_sat_data_processing():
+    filename = '20191114_051654_DDC4.bin'
+
+    filepath = DATA_DIR / filename
+    print(f'Process file {filepath}')
+
+    params = parse_parameters(filepath)
+
+    sampling_period = params.sampling_period
+    central_freq = params.central_freq
+    n_channels = params.n_channels
+    n_samples = params.n_samples
+
+    generator = take_quadratures(filepath, n_samples * 5, n_channels, n_samples * 10)
+
+    for quads_dict in generator:
+        quads = quads_dict[0].reshape(5, n_samples)
+        plt.figure(figsize=(15, 5))
+        for q in quads:
+
+            plt.plot(q.real)
+            #plt.plot(q.imag)
+        plt.show()
+
+
+def active_is_data_processing():
+    filename = '20191114_030635_DDC4.bin'
+    # filename = '20191114_035027_DDC4.bin'
+
+    filepath = DATA_DIR / filename
+    print(f'Process file {filepath}')
+
+    params = parse_parameters(filepath)
+
+    sampling_period = params.sampling_period
+    central_freq = params.central_freq
+    n_channels = params.n_channels
+    n_samples = params.n_samples
+
+    dlength = 200e-6 / sampling_period
+    code = square_barker(int(dlength), 5)
+
+    n_acc = 1000
+
+    nyq = 0.5 / sampling_period
+    crit_norm_freq = 100000 / nyq
+
+    filt = signal.butter(7, crit_norm_freq)  # type: Tuple[np.ndarray, np.ndarray]
+
+    generator = take_quadratures(filepath, n_samples * n_acc, n_channels, 0)
+
+    all_power = []
+    for quads_dict in generator:
+        quads = quads_dict[0].reshape(n_acc, n_samples)
+
+        # for q in quads:
+        #     plt.plot(q.real)
+        #     plt.plot(q.imag)
+        #     plt.show()
+
+        freqs = np.fft.fftshift(np.fft.fftfreq(n_samples, d=sampling_period)) + central_freq
+
+        spectra = np.fft.fftshift(np.mean(np.abs(np.fft.fft(quads, axis=1)) ** 2, axis=0))
+
+        quads = signal.lfilter(filt[0], filt[1], quads, axis=1)
+
+        filt_spectra = np.fft.fftshift(np.mean(np.abs(np.fft.fft(quads, axis=1)) ** 2, axis=0))
+        plt.plot(freqs, spectra)
+        plt.plot(freqs, filt_spectra)
+        plt.show()
+
+        quads = np.apply_along_axis(signal.correlate, axis=1, arr=quads, in2=code, mode='same') \
+                / np.sqrt(len(code))
+
+        power = (quads.real ** 2 + quads.imag ** 2).mean(axis=0)
+        plt.figure(figsize=(15, 5))
+        plt.plot(power)
+        # plt.ylim(6000, 10000)
+        plt.ylim(30000, 50000)
+        plt.show()
+        all_power.append(power)
+
+    plt.pcolormesh(np.array(all_power), vmin=30000, vmax=50000)
+    plt.show()
+
+
+if __name__ == '__main__':
+    # passive_data_processing()
+    # active_sat_data_processing()
+    active_is_data_processing()
+
