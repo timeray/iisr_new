@@ -78,7 +78,7 @@ class LaunchConfig(metaclass=ABCMeta):
 
 
 class IncoherentConfig(LaunchConfig):
-    valid_output_formats = ['std', 'txt']
+    valid_output_formats = ['std', 'txt', 'intermediate_txt']
 
     def __init__(self, paths: List[Path], output_formats: List[str],
                  n_accumulation: int, channels: List[Channel],

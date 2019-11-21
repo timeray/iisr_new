@@ -288,7 +288,7 @@ class Supervisor(metaclass=ABCMeta):
         handlers = {}
         curr_date = None
         save_results = output_formats is not None and output_formats
-        save_intermediate_txt = 'txt' in output_formats if save_results else None
+        save_intermediate_txt = 'intermediate_txt' in output_formats if save_results else None
 
         for date, key_params, batch in self.aggregator(packages):
             # Split results by date
