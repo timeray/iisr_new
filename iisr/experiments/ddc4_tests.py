@@ -214,18 +214,24 @@ def plot_fitting(save_name, freqs, noise_temp, output_power, gain, bias,
     fig.savefig(str(save_path))
 
 
-def plot_gain_bias(save_name, freqs, gain, bias, save_dir='Calibration'):
+def plot_gain_bias(save_name, freqs, gain, bias, decibel_gain=True, save_dir='Calibration'):
     fig = plt.figure(figsize=(7, 4))
     freqs /= 1e6  # to MHz
     plt.subplot(211)
+    gain = 10 * np.log10(gain) if decibel_gain else gain
     plt.plot(freqs, gain)
     # plt.title('Gain')
     plt.title('Усиление')
     plt.xlim(freqs[0], freqs[-1])
-    plt.ylim(0, PlotHelper.autolevel(gain)[1] * 1.4)
-    plt.xticks([])
-    plt.ylabel('Усиление')
-    plt.gca().ticklabel_format(axis='y', style='sci', scilimits=(0, 0))
+    if decibel_gain:
+        plt.ylim(60, 80)
+        plt.xlabel('Частота, МГц')
+        plt.ylabel('Усиление, дБ')
+    else:
+        plt.ylim(0, PlotHelper.autolevel(gain)[1] * 1.4)
+        plt.xticks([])
+        plt.ylabel('Усиление')
+        plt.gca().ticklabel_format(axis='y', style='sci', scilimits=(0, 0))
 
     plt.subplot(212)
     plt.plot(freqs, bias)
@@ -398,6 +404,7 @@ def perform_calibration(description, filepaths: Dict[str, float], filt=None, n_f
     noise_temperatures = np.array(noise_temperatures)
 
     coef_arr = np.stack([np.ones_like(noise_temperatures), noise_temperatures]).T
+
     bias, gain = np.linalg.pinv(coef_arr) @ output_temperatures
     bias /= gain
 
@@ -691,7 +698,7 @@ def active_is_data_processing():
 
 
 if __name__ == '__main__':
-    # passive_data_processing()
+    passive_data_processing()
     # active_sat_data_processing()
-    active_is_data_processing()
+    # active_is_data_processing()
 
