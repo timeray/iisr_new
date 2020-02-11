@@ -2,7 +2,7 @@ from iisr.plots.helpers import PlotHelper
 from matplotlib import pyplot as plt
 from iisr.filtering import MedianAdAroundMedianFilter
 from pathlib import Path
-from typing import BinaryIO, Dict
+from typing import BinaryIO, Dict, Tuple
 from iisr.utils import uneven_mean
 from iisr.preprocessing.active import square_barker
 from configparser import ConfigParser
@@ -11,7 +11,9 @@ from scipy.constants import Boltzmann
 from scipy.signal.windows import hann
 from scipy import signal
 import datetime as dt
+import itertools as it
 import numpy as np
+import os
 
 
 DATE_FMT = '%Y%m%d'
@@ -259,7 +261,7 @@ DDCParams = namedtuple('DDCParams', ['start_time', 'sampling_frequency', 'sampli
 def parse_parameters(filepath: Path) -> DDCParams:
     params = parse_parameter_file(filepath.with_suffix('.par'))
 
-    start_time = dt.datetime.strptime(filepath.name, f'{DTIME_FMT}_DDC4.bin')
+    start_time = dt.datetime.strptime(filepath.name[:15], f'{DTIME_FMT}')
     sampling_frequency = params['SAMPLING_RATE']
     sampling_period = 1 / sampling_frequency
     central_freq = params['SHIFT_FREQUENCY']
@@ -309,14 +311,14 @@ class QuadsFilter:
         return left_indices, filtered_quads
 
 
-def make_spectra(filename,
+def make_spectra(filepath,
                  filt=None,
                  n_fft=N_FFT,
                  n_acc=N_ACCUMULATION,
                  skip_n_samples=SKIP_N_SAMPLES,
                  n_sp=N_SPECTRA,
-                 window=False):
-    filepath = DATA_DIR / filename
+                 window=False,
+                 use_physical_units=True):
     print(f'Process file {filepath}')
 
     params = parse_parameters(filepath)
@@ -335,7 +337,8 @@ def make_spectra(filename,
     generator = take_quadratures(filepath, n_samples, n_channels, skip_n_samples)
     for i, quads_dict in enumerate(generator):
         for ch, quads in quads_dict.items():
-            quads *= ADC_VOLTS_PER_BIT  # quadratures to voltage
+            if use_physical_units:
+                quads *= ADC_VOLTS_PER_BIT  # quadratures to voltage
             new_quads = quads.reshape((n_acc, n_fft))
             if filt is not None:
                 x, new_quads = filt(new_quads)
@@ -354,8 +357,11 @@ def make_spectra(filename,
                 new_quads *= hann(n_fft)
             fft = np.fft.fftshift(np.fft.fft(new_quads, axis=1))
 
-            pws = calc_power_spectra(x, fft)  # Volts^2
-            pws /= ADC_INPUT_RESISTANCE  # Watts
+            pws = calc_power_spectra(x, fft)  # Volts^2 if physical units are used
+
+            if use_physical_units:
+                pws /= ADC_INPUT_RESISTANCE  # Watts
+
             sp[ch].append(pws)
             # plt.plot(freqs, pws)
             # plt.title(f'Channel {ch}')
@@ -601,6 +607,84 @@ def perform_all_calibration(filt=None):
         perform_calibration(descr, filepaths_dict, filt=filt)
 
 
+def _parse_calibrator_filename(filename: str):
+    date_str, experiment_params_str = filename[:-4].split('__')
+    dtime = dt.datetime.strptime(date_str, '%Y%m%d_%H%M%S')
+    level, frequency = [int(val) for val in experiment_params_str.split('_')]
+    return dtime, level, frequency
+
+
+def test_calibrator():
+    dirpath = DATA_DIR / 'calibrator'
+    n_samples = 32768
+    n_fft = 128
+    n_acc = n_samples // n_fft
+    frequences = [int(x) for x in [155e6, 157e6, 159e6, 161e6]]
+    levels = [100, 400, 700, 1000]
+
+    dtimes = []
+    harmonic_power = {(f, l): [] for f, l in it.product(frequences, levels)}
+
+    unique_pars = set()
+    n_combinations = len(harmonic_power)
+    for filename in sorted(os.listdir(dirpath)):
+        if not filename.endswith('.bin'):
+            continue
+
+        dtime, level, frequency = _parse_calibrator_filename(filename)
+        pars, fft_freqs, sp, _ = make_spectra(
+            dirpath / filename,
+            n_fft=n_fft,
+            n_acc=n_acc,
+            skip_n_samples=0,
+            n_sp=1,
+            use_physical_units=False
+        )
+        assert pars.central_freq == frequency
+
+        par_combination = (frequency, level)
+        if par_combination in unique_pars:
+            raise ValueError(f'Unexpected excessive data with parameters: {par_combination}')
+        else:
+            unique_pars.add(par_combination)
+
+        if par_combination not in harmonic_power:
+            raise ValueError(f'Unexpected pair (frequency, level) = ({frequency}, {level})')
+
+        sp = sp[0]
+        argmax = np.argmax(sp)
+        max_pwr = sp[argmax]
+        harmonic_power[par_combination].append(max_pwr)
+
+        if len(unique_pars) == n_combinations:
+            unique_pars = set()
+            dtimes.append(dtime)
+
+    dtimes = np.array(dtimes)
+    harmonic_power = {key: np.array(x) for key, x in harmonic_power.items()}
+
+    for ref_level in levels:
+        all_power = []
+        for (freq, level), power in harmonic_power.items():
+            if level != ref_level:
+                continue
+            outlier_filter = MedianAdAroundMedianFilter(n_sigma=5)
+            power = outlier_filter(power)
+            plt.plot(dtimes, power, label=f'{freq/1e6} MHz')
+            PlotHelper.set_time_ticks(plt.gca(), with_date=True)
+            all_power.append(power)
+
+        all_power = np.array(all_power).ravel()
+        ylim = PlotHelper.autolevel(all_power)
+        plt.ylim(ylim[0] * 0.9, ylim[1] * 1.1)
+        plt.xlabel('Time')
+        plt.ylabel('Central frequency power')
+        plt.title(f'level = {ref_level}')
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+
 def passive_data_processing():
     quadratures_filter = QuadsFilter(
         hard_threshold=HARD_THRESHOLD,
@@ -698,7 +782,8 @@ def active_is_data_processing():
 
 
 if __name__ == '__main__':
-    passive_data_processing()
+    test_calibrator()
+    # passive_data_processing()
     # active_sat_data_processing()
     # active_is_data_processing()
 
