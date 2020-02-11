@@ -69,7 +69,7 @@ class PassiveParameters(HandlerParameters):
     sampling_frequency = NotImplemented
     n_accumulation = NotImplemented
     n_fft = NotImplemented
-    channels = NotImplemented
+    channels = NotImplemented  # type: Tuple[Channel]
     band_type = NotImplemented
 
     @classmethod

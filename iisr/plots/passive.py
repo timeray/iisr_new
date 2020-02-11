@@ -9,7 +9,7 @@ from typing import List, Dict, Union, Optional
 from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from iisr.postprocessing.passive import SourceTrackInfo
+from iisr.postprocessing.passive import SourceTrackInfo, SkyPowerInfo
 from iisr.preprocessing.passive import PassiveScan, PassiveTrack
 from iisr.units import Frequency
 from iisr.plots.helpers import *
@@ -148,9 +148,7 @@ def plot_daily_spectra(scan: Optional[PassiveScan], tracks: List[PassiveTrack], 
         ax = plt.subplot(111)  # type: plt.Axes
 
         if level is None:
-            level = PlotHelper.autolevel(
-                np.ma.concatenate([sp.ravel() for sp in spectrum]),
-            )
+            level = PlotHelper.autolevel(np.ma.concatenate([sp.ravel() for sp in spectrum]))
 
         for dt_, fr, sp in zip(dtimes, freqs, spectrum):
             dt_ = PlotHelper.pcolor_adjust_coordinates(dt_)
@@ -275,6 +273,59 @@ def plot_processed_tracks(track: SourceTrackInfo, save_folder: Path, colored=Tru
         fig.tight_layout()
 
         save_name = f'track_spectra_{track.mode.name}_ch{ch}.png'
+        fig.savefig(save_folder / save_name)
+
+        plt.close(fig)
+
+
+@plot_languages()
+def plot_sky_power(sky_power_info: SkyPowerInfo, save_folder: Path, colored=True,
+                   figsize=FIGSIZE_ONELONG, level=None, timeout=dt.timedelta(minutes=10),
+                   language=None):
+
+    time_marks = sky_power_info.time_marks
+    frequencies = sky_power_info.frequencies
+    power = sky_power_info.values
+
+    time_marks, frequencies, power = _split_scan_by_timeout(
+        time_marks, frequencies, power, timeout=timeout
+    )
+
+    if colored:
+        cmap = None
+    else:
+        cmap = 'gray'
+
+    for ch, pwr_ch in power.items():
+        fig = plt.figure(figsize=figsize)
+        ax = plt.subplot(111)  # type: plt.Axes
+
+        if level is None:
+            level = PlotHelper.autolevel(np.ma.concatenate([val.ravel() for val in pwr_ch]))
+
+        for tm, fr, pwr in zip(time_marks, frequencies, pwr_ch):
+            tm = PlotHelper.pcolor_adjust_coordinates(tm)
+            fr = PlotHelper.pcolor_adjust_coordinates(fr['MHz'])
+            pcm = ax.pcolormesh(tm, fr.T, pwr, vmin=level[0], vmax=level[1], cmap=cmap)
+
+        PlotHelper.set_time_ticks(ax, with_date=True)
+        ax.set_xlim(PlotHelper.lim_daily(np.concatenate([tm for tm in time_marks])))
+
+        title = lang_string({'ru': 'Мощность шума неба, Вт', 'en': 'Sky power, W'}, language)
+        xlabel = lang_string({'ru': 'Время, UT', 'en': 'Time, UT'}, language)
+        ylabel = lang_string({'ru': 'Частота, МГц', 'en': 'Frequency, MHz'}, language)
+
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes('right', size='5%', pad=0.05)
+
+        plt.colorbar(pcm, cax=cax)
+        fig.tight_layout()
+
+        save_name = 'sky_power_ch{}'.format(ch)
         fig.savefig(save_folder / save_name)
 
         plt.close(fig)

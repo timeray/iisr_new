@@ -10,7 +10,7 @@ import argparse
 from iisr import IISR_PATH
 import iisr.config_utils as cu
 from iisr.data_manager import DataManager
-from iisr.postprocessing.run import compute_source_track
+from iisr.postprocessing.run import compute_source_track, compute_sky_noise
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(message)s')
 DEFAULT_CONFIG_FILE = IISR_PATH / 'iisr' / 'default_postprocessing.ini'
@@ -25,7 +25,7 @@ config = configparser.ConfigParser()
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument('mode', type=str, choices=['track'])
+    parser.add_argument('mode', type=str, choices=['track', 'sky_power'])
     parser.add_argument('-c', '--config-file', default=str(DEFAULT_CONFIG_FILE),
                         help='configuration file')
     args = parser.parse_args(argv)
@@ -45,6 +45,8 @@ def main(argv=None):
     mode = args.mode
     if mode == 'track':
         compute_source_track(dirpaths, subfolder_post)
+    elif mode == 'sky_power':
+        compute_sky_noise(dirpaths, subfolder_post)
 
 
 if __name__ == '__main__':
