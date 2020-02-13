@@ -9,3 +9,4 @@ __pycache__
 
 pre_processing_config.ini
 post_processing_config.ini
+plot_config.ini

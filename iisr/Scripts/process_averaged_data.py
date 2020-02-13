@@ -9,7 +9,6 @@ import argparse
 
 from iisr import IISR_PATH
 import iisr.config_utils as cu
-from iisr.data_manager import DataManager
 from iisr.postprocessing.run import compute_source_track, compute_sky_noise
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(message)s')
@@ -37,16 +36,16 @@ def main(argv=None):
     dates = cu.parse_dates_ranges(cfg_common['dates'])
     subfolder_pre = cfg_common['preprocessing_subfolder']
     subfolder_post = cfg_common['postprocessing_subfolder']
-    data_manager = DataManager()
-    dirpaths = []
-    for date in dates:
-        dirpaths.append(data_manager.get_preproc_folder_path(date, subfolders=[subfolder_pre]))
 
     mode = args.mode
     if mode == 'track':
-        compute_source_track(dirpaths, subfolder_post)
+        for date in dates:
+            compute_source_track(date, subfolder_pre, subfolder_post)
     elif mode == 'sky_power':
-        compute_sky_noise(dirpaths, subfolder_post)
+        for date in dates:
+            compute_sky_noise(date, subfolder_pre, subfolder_post)
+
+    logging.info('Postprocessing done.')
 
 
 if __name__ == '__main__':
