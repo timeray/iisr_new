@@ -9,7 +9,7 @@ import argparse
 
 from iisr import IISR_PATH
 import iisr.config_utils as cu
-from iisr.postprocessing.run import compute_source_track, compute_sky_noise
+from iisr.postprocessing.run import compute_source_track, compute_sky_power, perform_calibration
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(message)s')
 DEFAULT_CONFIG_FILE = IISR_PATH / 'iisr' / 'default_postprocessing.ini'
@@ -24,7 +24,7 @@ config = configparser.ConfigParser()
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument('mode', type=str, choices=['track', 'sky_power'])
+    parser.add_argument('mode', type=str, choices=['track', 'sky_power', 'calibration'])
     parser.add_argument('-c', '--config-file', default=str(DEFAULT_CONFIG_FILE),
                         help='configuration file')
     args = parser.parse_args(argv)
@@ -43,7 +43,10 @@ def main(argv=None):
             compute_source_track(date, subfolder_pre, subfolder_post)
     elif mode == 'sky_power':
         for date in dates:
-            compute_sky_noise(date, subfolder_pre, subfolder_post)
+            compute_sky_power(date, subfolder_pre, subfolder_post)
+    elif mode == 'calibration':
+        for date in dates:
+            perform_calibration(date, subfolder_pre, subfolder_post, subfolder_post)
 
     logging.info('Postprocessing done.')
 

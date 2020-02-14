@@ -8,11 +8,38 @@ import lmfit
 import numpy as np
 from collections import defaultdict
 from scipy.optimize import curve_fit
+
 from iisr.utils import central_time
 from iisr.digital_filter import DigitalFilter
 
 
 ESTIMATED_N_HUMPS = 11
+
+
+def fit_gauss(x, value, a_min, a_max, b_min, b_max, var_max):
+    def gauss(values: np.ndarray, pars: lmfit.Parameters):
+        a = pars['a']
+        b = pars['b']
+        mean = pars['mean']
+        var = pars['var']
+        return a * np.exp(-(values - mean) ** 2 / (2 * var)) + b
+
+    def gauss_res(pars: lmfit.Parameters, values: np.ndarray,
+                  target: np.ndarray):
+        return target - gauss(values, pars)
+
+    params = lmfit.Parameters()
+    params.add('a', np.max(value), min=a_min, max=a_max)
+    params.add('b', np.mean(value), min=b_min, max=b_max)
+    params.add('mean', x.mean(), min=x.min(), max=x.max())
+    params.add('var', value.var(), min=0., max=var_max)
+
+    args = (x, value)
+    fitter = lmfit.Minimizer(gauss_res, params, fcn_args=args)
+    res = fitter.minimize(method='least_squares')
+
+    model_gauss = gauss(x, res.params)
+    return res, model_gauss
 
 
 def fit_regression(train, target, rescale=True):
@@ -412,15 +439,15 @@ def model_residual(pars: lmfit.Parameters, sky_noise: np.ndarray,
     ----------
     pars: lmfit.Parameters
         Input vaiable parameters.
-    sky_noise: np.ndarray or np.ma.MaskedArray of shape (N, M)
+    sky_noise: np.ndarray or np.ma.MaskedArray of shape (M, N)
         Sky power for each frequency for each time bin.
-    observed_noise: np.ndarray or np.ma.MaskedArray of shape (N, M)
+    observed_noise: np.ndarray or np.ma.MaskedArray of shape (M, N)
         Observed power for each frequency and time bin.
     freqs: np.ndarray of shape (N, )
         Frequencies. Units must match with freq0.
     weights: np.ndarray or None, default None
         Weights for residuals. If None, no weighting will be applied.
-        Array should broadcast to (N, M) input shape.
+        Array should broadcast to (M, N) input shape.
     frequency_response: np.ndarray or None, default None
         Additional frequency response of the filter. Response should be wrt
         amplitude. If None, no additional response will be added.
@@ -442,7 +469,7 @@ def model_residual(pars: lmfit.Parameters, sky_noise: np.ndarray,
         gain = simple_gain(freqs, pars['freq0'], pars['a'], pars['var'],
                            frequency_response=frequency_response)
 
-    model = gain[:, None] * (sky_noise + pars['bias'])
+    model = gain * (sky_noise + pars['bias'])
 
     if weights is None:
         residuals = model - observed_noise
@@ -472,10 +499,10 @@ def fit_noise(sky_noise, observed_noise, freqs, freq0,
 
     Parameters
     ----------
-    sky_noise: np.ndarray or np.ma.MaskedArray of shape (N, M)
-        Sky power for each frequency for each time bin.
-    observed_noise: np.ndarray or np.ma.MaskedArray of shape (N, M)
-        Observed power for each frequency and time bin.
+    sky_noise: np.ndarray or np.ma.MaskedArray of shape (M, N)
+        Sky power for each time bin and frequency.
+    observed_noise: np.ndarray or np.ma.MaskedArray of shape (M, N)
+        Observed power for each time bin and frequency.
     freqs: np.ndarray of shape (N, )
         Frequencies. Units should match with freq0.
     freq0: number
@@ -513,12 +540,12 @@ def fit_noise(sky_noise, observed_noise, freqs, freq0,
     if not isinstance(observed_noise, np.ndarray):
         raise ValueError('Observed noise must be a numpy array')
 
-    if sky_noise.shape[0] != freqs.size or sky_noise.ndim != 2:
-        raise ValueError('Sky noise array must have (N, M) shape '
+    if sky_noise.shape[1] != freqs.size or sky_noise.ndim != 2:
+        raise ValueError('Sky noise array must have (M, N) shape '
                          'where N is a number of frequencies')
 
     if observed_noise.shape != sky_noise.shape:
-        raise ValueError('Observed noise array must have (N, M) shape '
+        raise ValueError('Observed noise array must have (M, N) shape '
                          'where N is a number of frequencies')
 
     if (freqs <= 0.).any() or freq0 <= 0:
@@ -620,11 +647,13 @@ def fit_noise(sky_noise, observed_noise, freqs, freq0,
 
     # Rescale coefficients back
     a = fit_res.params['a']
-    b = fit_res.params['b']
     bias = fit_res.params['bias']
     a.set(value=a * y_scale / x_scale, min=0., max=np.inf)
-    b.set(value=b * y_scale / x_scale, min=0., max=np.inf)
     bias.set(value=bias * x_scale, min=0., max=np.inf)
+
+    if gain_with_oscillations:
+        b = fit_res.params['b']
+        b.set(value=b * y_scale / x_scale, min=0., max=np.inf)
 
     return fit_res
 
@@ -655,9 +684,9 @@ def fit_sky_noise_2d(dtimes, freqs, central_freq, sky_power, noise_power, *,
         Array of frequencies.
     central_freq: number
         Central frequency for oscillating gaussian.
-    sky_power: np.ndarray with shape (M, N)
+    sky_power: np.ndarray with shape (N, M)
         Sky power.
-    noise_power: np.ndarray with shape (M, N)
+    noise_power: np.ndarray with shape (N, M)
         Noise power.
     window: int or None
         Length of estimation time window. If None, uses all available points.
@@ -695,16 +724,14 @@ def fit_sky_noise_2d(dtimes, freqs, central_freq, sky_power, noise_power, *,
     freqs = np.array(freqs, dtype=float)
 
     # Check inputs for validness to prevent any unexpected results
-    shape = (freqs.size, dtimes.size)
+    shape = (dtimes.size, freqs.size)
 
     if shape[0] == 0 or shape[1] == 0:
-        raise ValueError('Input array is empty (n_freqs: {}, n_dtimes: {})'
-                         ''.format(shape[0], shape[1]))
+        raise ValueError(f'Input array is empty (n_dtimes: {shape[0]} n_freqs: {shape[1]})')
 
     if sky_power.shape != shape or noise_power.shape != shape:
-        raise ValueError('Input arrays must have (M, N) shape, '
-                         'where M - number of frequencies, '
-                         'N - number of dtimes')
+        raise ValueError('Input arrays must have (N, M) shape, '
+                         'where N - number of dtimes, M - number of frequencies')
 
     if window is not None and (not isinstance(window, int) or window <= 0):
         raise ValueError('Window should be positive integer')
@@ -713,8 +740,7 @@ def fit_sky_noise_2d(dtimes, freqs, central_freq, sky_power, noise_power, *,
         raise ValueError('Timeout should be specified as datetime.timedelta')
 
     if below_window_mode not in ['reduce', 'skip', 'raise']:
-        raise ValueError('Incorrect below_window_mode: {}'
-                         ''.format(below_window_mode))
+        raise ValueError(f'Incorrect below_window_mode: {below_window_mode}')
 
     # Check window size
     if window is not None and ((window > shape[1]) and (below_window_mode == 'raise')):
@@ -724,8 +750,8 @@ def fit_sky_noise_2d(dtimes, freqs, central_freq, sky_power, noise_power, *,
     if timeout is not None:
         timeout_indices = np.where(np.abs(np.diff(dtimes)) >= timeout)[0] + 1
         dtimes_split = np.split(dtimes, timeout_indices)
-        sky_power_split = np.split(sky_power, timeout_indices, axis=1)
-        noise_power_split = np.split(noise_power, timeout_indices, axis=1)
+        sky_power_split = np.split(sky_power, timeout_indices, axis=0)
+        noise_power_split = np.split(noise_power, timeout_indices, axis=0)
     else:
         dtimes_split = [dtimes]
         sky_power_split = [sky_power]
@@ -764,21 +790,21 @@ def fit_sky_noise_2d(dtimes, freqs, central_freq, sky_power, noise_power, *,
         # Perform window splitting. If include final_window, then
         # we need one more window for last points
         if final_window:
-            n_wins = int(np.ceil(split_shape[1] / split_window))
+            n_wins = int(np.ceil(split_shape[0] / split_window))
         else:
-            n_wins = split_shape[1] // split_window
+            n_wins = split_shape[0] // split_window
 
-        gain = np.empty((n_wins, shape[0]), dtype=float)
+        gain = np.empty((n_wins, shape[1]), dtype=float)
 
         for i in range(n_wins):
             # Account for possible final window
-            win_end = min((i + 1) * split_window, split_shape[1])
+            win_end = min((i + 1) * split_window, split_shape[0])
             sl = slice(win_end - split_window, win_end)
 
             if gain_with_oscillations:
                 # Estimate number of humps in the data by finding peaks
                 if n_humps_search_range == 'auto':
-                    mean_noise = noise_pwr[:, sl].mean(axis=1)
+                    mean_noise = noise_pwr[sl].mean(axis=0)
                     diff = np.diff(mean_noise)
                     max_peaks_args = np.where((diff[:-1] > 0) & (diff[1:] <= 0))[0] + 1
                     min_peaks_args = np.where((diff[:-1] < 0) & (diff[1:] >= 0))[0] + 1
@@ -799,7 +825,7 @@ def fit_sky_noise_2d(dtimes, freqs, central_freq, sky_power, noise_power, *,
                     n_humps = None
 
             # Fit the model
-            fit_res = fit_noise(sky_pwr[:, sl], noise_pwr[:, sl], freqs,
+            fit_res = fit_noise(sky_pwr[sl], noise_pwr[sl], freqs,
                                 freq0=central_freq,
                                 n_humps=n_humps,
                                 n_humps_range=n_humps_search_range,
@@ -823,9 +849,10 @@ def fit_sky_noise_2d(dtimes, freqs, central_freq, sky_power, noise_power, *,
             fit_params['a'].append(pars['a'])
             fit_params['var'].append(pars['var'])
 
-            fit_params['b'].append(pars['b'])
-            fit_params['n_humps'].append(pars['n_humps'])
-            fit_params['phase'].append(pars['phase'])
+            if gain_with_oscillations:
+                fit_params['b'].append(pars['b'])
+                fit_params['n_humps'].append(pars['n_humps'])
+                fit_params['phase'].append(pars['phase'])
 
             # Find datetime that corresponds to estimated parameters
             new_dtimes_list.append(central_time(dt[sl]))

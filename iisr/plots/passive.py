@@ -9,7 +9,7 @@ from typing import List, Dict, Union, Optional
 from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from iisr.postprocessing.passive import SourceTrackInfo, SkyPowerInfo
+from iisr.postprocessing.passive import SourceTrackInfo, SkyPowerInfo, CalibrationInfo
 from iisr.preprocessing.passive import PassiveScan, PassiveTrack
 from iisr.units import Frequency
 from iisr.plots.helpers import *
@@ -306,7 +306,7 @@ def plot_sky_power(sky_power_info: SkyPowerInfo, save_folder: Path, colored=True
         for tm, fr, pwr in zip(time_marks, frequencies, pwr_ch):
             tm = PlotHelper.pcolor_adjust_coordinates(tm)
             fr = PlotHelper.pcolor_adjust_coordinates(fr['MHz'])
-            pcm = ax.pcolormesh(tm, fr.T, pwr, vmin=level[0], vmax=level[1], cmap=cmap)
+            pcm = ax.pcolormesh(tm, fr.T, pwr.T, vmin=level[0], vmax=level[1], cmap=cmap)
 
         PlotHelper.set_time_ticks(ax, with_date=True)
         ax.set_xlim(PlotHelper.lim_daily(np.concatenate([tm for tm in time_marks])))
@@ -329,3 +329,37 @@ def plot_sky_power(sky_power_info: SkyPowerInfo, save_folder: Path, colored=True
         fig.savefig(save_folder / save_name)
 
         plt.close(fig)
+
+
+@plot_languages()
+def plot_calibration(calib_info: CalibrationInfo, save_folder: Path, colored=True,
+                   figsize=FIGSIZE_ONELONG, language=None):
+    frequencies = calib_info.frequencies
+    central_frequencies = Frequency(np.array([fr['MHz'] for fr in calib_info.central_frequencies])
+                                    , 'MHz')
+    gains = calib_info.gains
+    channels = list(gains.keys())
+    biases = calib_info.biases
+
+    ch_label = {'en': 'Ch = {}', 'ru': 'Кан = {}'}[language]
+    gain_title = {'en': 'Gain', 'ru': 'Усиление'}[language]
+    bias_title = {'en': 'Bias', 'ru': 'Смещение'}[language]
+
+    fig = plt.figure(figsize=figsize)
+    xlim = (frequencies['MHz'][0], frequencies['MHz'][-1])
+    for ch in channels:
+        ax_gain = plt.subplot(211)  # type: plt.Axes
+        ax_gain.plot(frequencies['MHz'], gains[ch], label=ch_label.format(ch))
+        ax_gain.set_title(gain_title)
+        ax_gain.legend()
+        ax_gain.set_xlim(*xlim)
+
+        ax_bias = plt.subplot(212)  # type: plt.Axes
+        ax_bias.plot(central_frequencies['MHz'], biases[ch], label=ch_label.format(ch))
+        ax_bias.set_title(bias_title)
+        ax_bias.legend()
+        ax_bias.set_xlim(*xlim)
+
+    plt.tight_layout()
+
+    fig.savefig(save_folder / 'calibration.png')
