@@ -22,7 +22,7 @@ config = configparser.ConfigParser()
 def main(argv=None):
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument('mode', type=str, choices=['spectra_coherence', 'track', 'sky_power',
-                                                   'calibration'])
+                                                   'calibration', 'sun_pattern', 'sun_flux'])
     parser.add_argument('-c', '--config-file', default=str(DEFAULT_CONFIG_FILE),
                         help='configuration file')
     args = parser.parse_args(argv)
@@ -49,11 +49,17 @@ def main(argv=None):
         for date in dates:
             plot_sky_power(date, data_subfolder=post_subfolder,
                            figures_subfolder=figures_subfolder)
-
     elif mode == 'calibration':
         for date in dates:
             plot_calibration(date, data_subfolder=post_subfolder,
                              figures_subfolder=figures_subfolder)
+    elif mode == 'sun_pattern':
+        for date in dates:
+            plot_sun_pattern_vs_power(date, data_subfolder=post_subfolder,
+                                      figures_subfolder=figures_subfolder)
+    elif mode == 'sun_flux':
+        for date in dates:
+            plot_sun_flux(date, data_subfolder=post_subfolder, figures_subfolder=figures_subfolder)
 
     logging.info('Plotting done.')
 

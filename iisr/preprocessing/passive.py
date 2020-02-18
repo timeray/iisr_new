@@ -236,7 +236,7 @@ class PassiveTrack(PassiveResult):
         if self._frequencies is None:
             ref_band = calc_ref_band(self.n_fft, self.sampling_frequency)
             self._frequencies = np.empty((len(self.time_marks), self.n_fft), dtype=float)
-            for time_num, freq in enumerate([fr['Hz'] for fr in self.central_frequencies]):
+            for time_num, freq in enumerate([fr for fr in self.central_frequencies['Hz']]):
                 self._frequencies[time_num] = freq + ref_band['Hz']
             self._frequencies = Frequency(self._frequencies, 'Hz')
 
@@ -347,8 +347,11 @@ class PassiveScanHandler(PassiveHandler):
                          eval_coherence=eval_coherence,
                          filter_threshold=filter_threshold,
                          outlier_max_rate=outlier_max_rate)
-        self.central_frequencies = parameters.central_frequencies
-        self.n_central = len(self.central_frequencies)
+        self.central_frequencies = Frequency(
+            np.array([f['Hz'] for f in parameters.central_frequencies]),
+            'Hz'
+        )
+        self.n_central = self.central_frequencies.size
         self.frequencies, self.band_masks = self._get_non_overlapping_masks()
         self.intermediate_results = []
         self.filter = MedianAdAroundMedianFilter(filter_threshold)
@@ -359,21 +362,22 @@ class PassiveScanHandler(PassiveHandler):
         band_masks = []
 
         ref_band = calc_ref_band(self.n_fft, self.parameters.sampling_frequency)['Hz']
+        central_freqs_hz = self.central_frequencies['Hz']
 
         for central_freq_num in range(self.n_central):
-            curr_central_freq = self.central_frequencies[central_freq_num]['Hz']
+            curr_central_freq = central_freqs_hz[central_freq_num]
             freq_band = ref_band + curr_central_freq
             band_mask = np.ones(self.n_fft, dtype=bool)
 
             # Overlap with previous band
             if central_freq_num != 0:
-                prev_central_freq = self.central_frequencies[central_freq_num - 1]['Hz']
+                prev_central_freq = central_freqs_hz[central_freq_num - 1]
                 prev_mid_freq = prev_central_freq + (curr_central_freq - prev_central_freq) / 2
                 band_mask &= (freq_band > prev_mid_freq)
 
             # Overlap with following band
             if central_freq_num != (self.n_central - 1):
-                next_central_freq = self.central_frequencies[central_freq_num + 1]['Hz']
+                next_central_freq = central_freqs_hz[central_freq_num + 1]
                 next_mid_freq = curr_central_freq + (next_central_freq - curr_central_freq) / 2
                 band_mask &= (freq_band < next_mid_freq)
 

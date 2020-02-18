@@ -3,14 +3,14 @@ Wrapper for C-functions calculating antenna pattern for Irkutsk Incoherent
 Scatter Radar (IISR).
 """
 
-
+from pathlib import Path
 import ctypes as ct
 from scipy.integrate import simps
 from functools import lru_cache
 import numpy as np
 import sys
-import os
 from scipy.constants import speed_of_light
+from tqdm import tqdm
 
 # Constants
 IISR_LON = np.deg2rad(103.255)
@@ -18,11 +18,11 @@ IISR_LAT = np.deg2rad(52.875)
 IISR_HEIGHT = 500.
 TEMPERATURE_SENSETIVITY = 0.01  # degree per Celcius degree
 
-_dir_path = os.path.dirname(os.path.abspath(__file__))
+_dir_path = Path(__file__).parent
 if sys.platform.startswith('win'):
-    dll = ct.CDLL(os.path.join(_dir_path, 'DNRIISR.dll'))
+    dll = ct.CDLL(str(_dir_path / 'DNRIISR.dll'))
 elif sys.platform.startswith('linux'):
-    dll = ct.CDLL(os.path.join(_dir_path, 'DNRIISR.so'))
+    dll = ct.CDLL(str(_dir_path / 'DNRIISR.so'))
 else:
     raise OSError(f'Cannot load shared library for platform {sys.platform}')
 
@@ -304,36 +304,36 @@ def ant_max_direction(freq, fit='Lebedev_model'):
         Epsilon of antenna coordinates, rad.
     """
     if fit == 'Lebedev':
-        freqkHz = freq * 1e3  # to kHz, to float
+        freq_kilohertz = freq * 1e3  # to kHz, to float
         dep = 0.2816
         ep = 185634.9983 \
-             - 4.877867876 * freqkHz \
-             + 4.803667396E-005 * freqkHz**2 \
-             - 2.102600271E-010 * freqkHz**3 \
-             + 3.453540782E-016 * freqkHz**4
+             - 4.877867876 * freq_kilohertz \
+             + 4.803667396E-005 * freq_kilohertz**2 \
+             - 2.102600271E-010 * freq_kilohertz**3 \
+             + 3.453540782E-016 * freq_kilohertz**4
         ep += dep
         return np.deg2rad(ep)
     elif fit == 'Lebedev_model':
         return ant_max_direction_model_c_wrapped(freq * 1000.0)
     elif fit in ['Vasiliev_old', 'Vasiliev']:
-        freqHz = freq * 1e6  # to kHz, to float
+        freq_hz = freq * 1e6  # to kHz, to float
         d = 0.87
         a = 0.136
         b = 0.014
         h = 0.384
-        wavelength = speed_of_light / freqHz
+        wavelength = speed_of_light / freq_hz
         k = 2.0 * np.pi / wavelength
 
         if fit == 'Vasiliev_old':
             hi_f = -32.3802499 \
-                   + 6.329699841E-007 * freqHz \
-                   - 4.001034124E-015 * freqHz ** 2 \
-                   + 8.374351252E-024 * freqHz ** 3
+                   + 6.329699841E-007 * freq_hz \
+                   - 4.001034124E-015 * freq_hz ** 2 \
+                   + 8.374351252E-024 * freq_hz ** 3
         else:
             hi_f = 13.5066804030779 \
-                   - 23.894031675887E-008 * freqHz \
-                   + 15.2068384591317E-016 * freqHz ** 2 \
-                   - 3.28019314316317E-024 * freqHz ** 3
+                   - 23.894031675887E-008 * freq_hz \
+                   + 15.2068384591317E-016 * freq_hz ** 2 \
+                   - 3.28019314316317E-024 * freq_hz ** 3
 
         g = hi_f * np.sqrt(1 + ((a / (a + b)) * np.tan(k * h)) ** 2)
         theta = g - wavelength / d
@@ -380,30 +380,30 @@ def obs2tar_position(ep, gam, distance, lat=IISR_LAT, lon=IISR_LON,
     With False flag return_above_sea, returned heights are heights
     above the sea minus observer height.
     """
-    Ff = 1 / 298.257  # Earth compression
-    Ee = 2.0 * Ff - Ff * Ff  # Earth eccentricity squared
-    R0 = 6378140.0  # Biggest Earth semi-axis, m
-    Ua = np.deg2rad(7)  # Angle between meridian and main axis of antenna
-    Ub = np.deg2rad(10)  # Angle between normal to horn and zenith
+    f_f = 1 / 298.257  # Earth compression
+    e_e = 2.0 * f_f - f_f * f_f  # Earth eccentricity squared
+    r0 = 6378140.0  # Biggest Earth semi-axis, m
+    u_a = np.deg2rad(7)  # Angle between meridian and main axis of antenna
+    u_b = np.deg2rad(10)  # Angle between normal to horn and zenith
 
     def find_h_fi(z, dist):
         phi = np.arctan(z / dist)
         for i in range(1, 16):
-            C = 1 / np.sqrt(1 - Ee * np.sin(phi) ** 2)
-            x = z + R0 * C * Ee * np.sin(phi)
+            c = 1 / np.sqrt(1 - e_e * np.sin(phi) ** 2)
+            x = z + r0 * c * e_e * np.sin(phi)
             phi = np.arctan(x / dist)
 
-        C = 1 / np.sqrt(1 - Ee * np.sin(phi) ** 2)
-        x = dist / np.cos(phi) - R0 * C
+        c = 1 / np.sqrt(1 - e_e * np.sin(phi) ** 2)
+        x = dist / np.cos(phi) - r0 * c
         return phi, x
 
-    ZN = R0 / np.sqrt(1 - Ee * np.sin(lat) * np.sin(lat))
-    RX = (ZN + height) * np.cos(lat) * np.cos(lon)
-    RY = (ZN + height) * np.cos(lat) * np.sin(lon)
-    RZ = (ZN * (1 - Ee) + height) * np.sin(lat)
+    zn = r0 / np.sqrt(1 - e_e * np.sin(lat) * np.sin(lat))
+    rx = (zn + height) * np.cos(lat) * np.cos(lon)
+    ry = (zn + height) * np.cos(lat) * np.sin(lon)
+    rz = (zn * (1 - e_e) + height) * np.sin(lat)
 
-    el = np.arcsin(np.cos(Ub - gam) * np.cos(ep))
-    az = 1.5*np.pi - Ua - np.arctan2(np.sin(ep), np.cos(ep)*np.sin(Ub - gam))
+    el = np.arcsin(np.cos(u_b - gam) * np.cos(ep))
+    az = 1.5*np.pi - u_a - np.arctan2(np.sin(ep), np.cos(ep)*np.sin(u_b - gam))
     delt = np.arcsin(np.sin(el) * np.sin(lat)
                      + np.cos(az) * np.cos(el) * np.cos(lat))
     th = -np.arctan2(
@@ -411,20 +411,20 @@ def obs2tar_position(ep, gam, distance, lat=IISR_LAT, lon=IISR_LON,
         np.sin(el) * np.cos(lat) - np.cos(az) * np.cos(el) * np.sin(lat)
     )
 
-    RX += distance * (np.cos(delt) * np.cos(lon + th))
-    RY += distance * (np.cos(delt) * np.sin(lon + th))
-    RZ += distance * np.sin(delt)
-    RR = np.sqrt(RX * RX + RY * RY)
+    rx += distance * (np.cos(delt) * np.cos(lon + th))
+    ry += distance * (np.cos(delt) * np.sin(lon + th))
+    rz += distance * np.sin(delt)
+    rr = np.sqrt(rx * rx + ry * ry)
 
-    res_lon = np.arctan2(RY, RX)
-    res_lat, H = find_h_fi(RZ, RR)
+    res_lon = np.arctan2(ry, rx)
+    res_lat, h = find_h_fi(rz, rr)
 
     if return_above_sea:
-        return res_lat, res_lon, H
+        return res_lat, res_lon, h
     else:
         # TODO: should subtract altitude above sea and surface at
         # the position of target (phi, lg), not radar (lon, lat)
-        return res_lat, res_lon, H - height
+        return res_lat, res_lon, h - height
 
 
 # === Shortcuts ===
@@ -541,3 +541,40 @@ def monostatic_integral(freq, tr_type, rc_type, coord_sys='spherical'):
                                    rc_type=rc_type, precision=500,
                                    coord_sys=coord_sys)
     return 4 * np.pi * directivity_rc * directivity_tr / mono_directivity
+
+
+def approximate_directivity(frequencies, dnr_type):
+    """Polynomical approximation of directivity.
+
+    Args:
+        frequencies: float or np.ndarray
+            Frequencies, MHz.
+
+    Returns:
+
+    """
+    coefs = {
+        'lower': [-0.0600095838, 37.1204062200, -8616.7620104487,
+                  889650.5824498440, -34468386.8650332987],
+        'upper': [-0.0600095838, 37.1204062200, -8616.7620104487,
+                  889650.5824498440, -34468386.8650332987],
+        'both': [-0.1038420502, 64.2353988944, -14911.2823747195,
+                 1539572.2749214517, -59650250.9854609445],
+    }
+    return np.polyval(coefs[dnr_type], frequencies)
+
+
+def calc_directivity_approximation():
+    n = 20
+    frequency_range = np.linspace(152, 164, n)
+
+    print('Directivity approximation')
+    for dnr_type in ['upper', 'lower', 'both']:
+        directivity_array = np.array(
+            [directivity(f, dnr_type=dnr_type, angle_step_deg=0.05) for f
+             in tqdm(frequency_range, total=n, desc='Directivity array calculation')]
+        )
+        coefs, residuals, _, _, _ = np.polyfit(frequency_range, directivity_array, deg=4, full=True)
+        coefs_str = [f'{c:.10f}' for c in coefs]
+        print(f'Polyfit coefficients for {dnr_type} horn = {", ".join(coefs_str)}'
+              f' with residuals = {residuals.item():.20f}', file=sys.stderr)

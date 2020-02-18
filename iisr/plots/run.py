@@ -3,12 +3,13 @@ import logging
 
 from iisr.data_manager import DataManager
 from iisr.plots import passive as pp
-from iisr.postprocessing.passive import SourceTrackInfo, SkyPowerInfo, CalibrationInfo
+from iisr.postprocessing.passive import SourceTrackInfo, SkyPowerInfo, CalibrationInfo, \
+    SunPatternInfo, SunFluxInfo
 from iisr.preprocessing.passive import PassiveMode, PassiveScan, PassiveTrack
 
 
 __all__ = ['plot_spectra_and_coherence', 'plot_sky_power', 'plot_calibration',
-           'plot_processed_tracks']
+           'plot_processed_tracks', 'plot_sun_pattern_vs_power', 'plot_sun_flux']
 
 
 def plot_spectra_and_coherence(date: dt.date, data_subfolder: str = '', figures_subfolder: str = '',
@@ -83,3 +84,36 @@ def plot_calibration(date: dt.date, data_subfolder: str = '', figures_subfolder:
 
         logging.info('Plot calibration')
         pp.plot_calibration(calibration_info, save_folder=save_dir)
+
+
+def plot_sun_pattern_vs_power(date: dt.date, data_subfolder: str = '', figures_subfolder: str = ''):
+    with DataManager() as manager:
+        data_dir = manager.get_postproc_folder_path(date, subfolders=[data_subfolder])
+        save_dir = manager.get_figures_folder_path(date, subfolders=[figures_subfolder])
+
+        filepath = data_dir / f'sun_pattern_gaussian_kernel.pkl'
+
+        if filepath.exists():
+            track = SunPatternInfo.load_pickle(filepath)
+        else:
+            raise FileNotFoundError(f'No sun track for given date {date}, dirpath={data_dir}')
+
+        logging.info('Plot sun pattern info')
+        pp.plot_sun_pattern_vs_power(track, save_folder=save_dir)
+
+
+def plot_sun_flux(date: dt.date, data_subfolder: str = '', figures_subfolder: str = ''):
+    with DataManager() as manager:
+        data_dir = manager.get_postproc_folder_path(date, subfolders=[data_subfolder])
+        save_dir = manager.get_figures_folder_path(date, subfolders=[figures_subfolder])
+
+        filepath = data_dir / f'sun_flux.pkl'
+
+        if filepath.exists():
+            sun_flux_info = SunFluxInfo.load_pickle(filepath)
+        else:
+            raise FileNotFoundError(f'No sun track for given date {date}, dirpath={data_dir}')
+
+        logging.info('Plot sun flux')
+        pp.plot_sun_flux(sun_flux_info, save_folder=save_dir)
+

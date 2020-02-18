@@ -15,4 +15,4 @@ config = {
     'name': 'iisr',
 }
 
-setup(install_requires=['numpy', 'scipy', 'matplotlib', 'lmfit', 'astropy'], **config)
+setup(install_requires=['numpy', 'scipy', 'matplotlib', 'lmfit', 'astropy', 'tqdm'], **config)

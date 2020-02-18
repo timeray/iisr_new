@@ -9,7 +9,8 @@ from typing import List, Dict, Union, Optional
 from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from iisr.postprocessing.passive import SourceTrackInfo, SkyPowerInfo, CalibrationInfo
+from iisr.postprocessing.passive import SourceTrackInfo, SkyPowerInfo, CalibrationInfo, \
+    SunPatternInfo, SunFluxInfo
 from iisr.preprocessing.passive import PassiveScan, PassiveTrack
 from iisr.units import Frequency
 from iisr.plots.helpers import *
@@ -335,8 +336,7 @@ def plot_sky_power(sky_power_info: SkyPowerInfo, save_folder: Path, colored=True
 def plot_calibration(calib_info: CalibrationInfo, save_folder: Path, colored=True,
                    figsize=FIGSIZE_ONELONG, language=None):
     frequencies = calib_info.frequencies
-    central_frequencies = Frequency(np.array([fr['MHz'] for fr in calib_info.central_frequencies])
-                                    , 'MHz')
+    central_frequencies = calib_info.central_frequencies
     gains = calib_info.gains
     channels = list(gains.keys())
     biases = calib_info.biases
@@ -363,3 +363,69 @@ def plot_calibration(calib_info: CalibrationInfo, save_folder: Path, colored=Tru
     plt.tight_layout()
 
     fig.savefig(save_folder / 'calibration.png')
+
+
+@plot_languages()
+def plot_sun_pattern_vs_power(sun_pattern_info: SunPatternInfo, save_folder: Path, colored=True,
+                              figsize=FIGSIZE_ONELONG, language=None):
+    time_marks = sun_pattern_info.time_marks
+    conv_pattern = sun_pattern_info.convolved_pattern
+    channels = list(conv_pattern.keys())
+    power = sun_pattern_info.max_power
+    pattern = sun_pattern_info.pattern
+
+    power_label = {'en': 'Receiver power', 'ru': 'Принятая мощность'}[language]
+    conv_pattern_label = {'en': 'Convolved pattern', 'ru': 'Свертка с ДН'}[language]
+
+    for ch in channels:
+        fig = plt.figure(figsize=figsize)
+        title = {'en': f'Received power vs convolved pattern (ch = {ch})',
+                 'ru': f'Принятая мощность и свертка с ДН (кан = {ch})'}[language]
+
+        ax_conv_pattern = plt.subplot(211)  # type: plt.Axes
+        ax_conv_pattern.plot(time_marks, conv_pattern[ch], label=power_label, color='C0')
+        ax_power = ax_conv_pattern.twinx()
+        ax_power.plot(time_marks, power[ch], label=conv_pattern_label, color='C1')
+
+        PlotHelper.set_time_ticks(ax_conv_pattern, with_date=True)
+
+        ax_conv_pattern.set_title(title)
+        ax_conv_pattern.legend()
+
+        ax_pattern = plt.subplot(212)  # type: plt.Axes
+        ax_pattern.plot(time_marks, pattern[ch])
+        PlotHelper.set_time_ticks(ax_pattern, with_date=True)
+
+        fig.tight_layout()
+
+        save_name = f'sun_power_vs_pattern_ch{ch}'
+        fig.savefig(save_folder / save_name)
+
+        plt.close(fig)
+
+
+@plot_languages()
+def plot_sun_flux(sun_flux_info: SunFluxInfo, save_folder: Path, colored=True,
+                  figsize=FIGSIZE_ONELONG, language=None):
+    channels = sun_flux_info.channels
+    time_marks = sun_flux_info.time_marks
+    sun_flux = sun_flux_info.sun_flux
+
+    watts2sfu = 10e22
+
+    label = {'en': 'Ch = {}', 'ru': 'Кан = {}'}[language]
+    xlabel = {'en': 'Time, UT', 'ru': 'Время, UT'}[language]
+    ylabel = {'en': 'Sun flux, sfu', 'ru': 'Поток Солнца, sfu'}[language]
+
+    fig = plt.figure(figsize=figsize)
+    ax = plt.subplot(111)  # type: plt.Axes
+    for ch in channels:
+        ax.plot(time_marks, sun_flux[ch] * watts2sfu, label=label.format(label))
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    PlotHelper.set_time_ticks(ax, with_date=True)
+
+    plt.tight_layout()
+
+    fig.savefig(save_folder / 'sun_flux.png')
