@@ -1,6 +1,6 @@
 from collections import namedtuple
 from pathlib import Path
-from typing import List, Union
+from typing import List, Union, Dict
 
 import numpy as np
 import pickle as pkl
@@ -14,7 +14,8 @@ from iisr.antenna.dnriisr import approximate_directivity
 from iisr.antenna.sky_noise import SkyNoiseInterpolator
 from iisr.antenna.radio_sources import GaussianKernel, sun_pattern_1d
 from iisr.fitting import fit_sky_noise_2d, fit_gauss
-from iisr.preprocessing.passive import PassiveScan, PassiveTrack, PassiveMode
+from iisr.preprocessing.passive import PassiveScan, PassiveTrack, PassiveMode, \
+    PassiveTrackParameters
 from iisr.data_manager import DataManager
 from iisr.representation import Channel
 from iisr.units import Frequency
@@ -122,6 +123,11 @@ class CalibrationInfo(PickleLoadable):
     FitResult2d = namedtuple('FitResults1d', ['dtimes', 'gains', 'biases', 'gain_params'])
 
     def __init__(self, scan_data: PassiveScan, sky_power: SkyPowerInfo, method: str = 'simple_fit'):
+        for ch in scan_data.spectra.keys():
+            if scan_data.spectra[ch].shape != sky_power.values[ch].shape:
+                raise ValueError('Cannot calibrate data - scan data and sky power '
+                                 'have different shapes')
+
         self.version = 1
         self.method = method
         self._gain_interpolator = None
@@ -223,12 +229,33 @@ class CalibrationInfo(PickleLoadable):
 
 
 class SunPatternInfo(PickleLoadable):
-    def __init__(self, sun_track_data: PassiveTrack):
+    class PseudoPassiveTrack:
+        class Params:
+            pass
+
+        def __init__(self, dates, time_marks: np.ndarray, frequencies: Frequency,
+                     spectra: Dict[Channel, np.ndarray], coherence: np.ndarray,
+                     params: PassiveTrackParameters):
+            self.dates = dates
+            self.time_marks = time_marks
+            self.frequencies = frequencies
+            self.spectra = spectra
+            self.coherence = coherence
+            self.parameters = params
+
+    def __init__(self, sun_track_data: PassiveTrack = None, scan_data: PassiveScan = None):
+        if (sun_track_data is None and scan_data is None) \
+                or (sun_track_data is not None and scan_data is not None):
+            raise ValueError('Either sun track or scan data should be provided')
+
         if sun_track_data.parameters.mode != PassiveMode.sun:
             raise ValueError(f'Input data should be sun track, '
                              f'but {sun_track_data.parameters.mode} was given.')
 
-        track = sun_track_data
+        if sun_track_data is not None:
+            track = sun_track_data
+        else:
+            track = self._extract_sun_track_from_scan_data(scan_data)
 
         if len(track.dates) > 1:
             raise ValueError('Multiple dates processing not implemented')
@@ -237,10 +264,10 @@ class SunPatternInfo(PickleLoadable):
         self.time_marks = track.time_marks
         self.pattern_value = None  # Value of the IISR pattern in the Sun position
         self.bin_band = Frequency(
-            sun_track_data.frequencies['Hz'][0, 1] - sun_track_data.frequencies['Hz'][0, 0],
+            track.frequencies['Hz'][0, 1] - track.frequencies['Hz'][0, 0],
             'Hz'
         )
-        self.channels = sun_track_data.parameters.channels
+        self.channels = track.parameters.channels
 
         # Fit gaussian coherence to find frequency where maximal Sun intensity supposed to be
         # This should remove variation of pattern caused by temperature
@@ -276,6 +303,39 @@ class SunPatternInfo(PickleLoadable):
                 for tm, fr in zip(self.time_marks, self.visible_max_freqs['MHz'])
             ])
             self.sky_power[ch] = track_sky_noise * self.bin_band['Hz'] * Boltzmann
+
+    def _extract_sun_track_from_scan_data(self, scan_data: PassiveScan) -> PseudoPassiveTrack:
+        # Find frequencies with expected maximum coherence for the Sun
+        expected_max_freqs = NotImplemented  # type: Frequency
+        # Find arguments of frequencies, closest to the found maximum, in the scan data
+        args = self._find_closest(expected_max_freqs['MHz'], scan_data.frequencies['MHz'])
+        closest_freqs = Frequency(scan_data.frequencies['MHz'][args], 'MHz')
+
+        # Cut the 1 MHz Sun track from coherence and power data
+        margin_frequency = 1  # MHz
+        freq_delta = scan_data.frequencies['MHz'][1] - scan_data.frequencies['MHz'][0]
+        margin = int(margin_frequency / freq_delta)
+        half_margin = margin / 2
+
+        shape = len(scan_data.time_marks), scan_data.frequencies.size
+        frequencies = np.empty(shape)
+        coherence = np.empty(shape)
+        spectra = {ch: np.empty(shape) for ch in scan_data.parameters.channels}
+
+        for arg in args:
+            sl = slice(arg - half_margin, arg + half_margin)
+            frequencies[arg] = scan_data.frequencies['MHz'][sl]
+            coherence[arg] = scan_data.coherence[arg, sl]
+            for ch in scan_data.parameters.channels:
+                spectra[ch][arg] = scan_data.spectra[ch][arg, sl]
+        frequencies = Frequency(frequencies, 'MHz')
+
+        return self.PseudoPassiveTrack(scan_data.dates, scan_data.time_marks,
+                                       frequencies, spectra, coherence, s)
+
+    @staticmethod
+    def _find_closest(ref1d, values2d):
+        return np.argmin(np.abs(values2d - ref1d), axis=1)
 
     def save_pickle(self, data_manager: DataManager, subfolders: List[str] = None):
         dirpath = data_manager.get_postproc_folder_path(self.date, subfolders=subfolders)
