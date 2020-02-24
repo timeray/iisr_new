@@ -2,6 +2,7 @@ from collections import namedtuple
 from pathlib import Path
 from typing import List, Union, Dict
 
+import datetime as dt
 import numpy as np
 import pickle as pkl
 import logging
@@ -12,13 +13,17 @@ from scipy.interpolate import interp1d
 
 from iisr.antenna.dnriisr import approximate_directivity
 from iisr.antenna.sky_noise import SkyNoiseInterpolator
-from iisr.antenna.radio_sources import GaussianKernel, sun_pattern_1d
+from iisr.antenna.radio_sources import GaussianKernel, sun_pattern_1d, find_sun_max_frequencies
 from iisr.fitting import fit_sky_noise_2d, fit_gauss
 from iisr.preprocessing.passive import PassiveScan, PassiveTrack, PassiveMode, \
     PassiveTrackParameters
 from iisr.data_manager import DataManager
 from iisr.representation import Channel
 from iisr.units import Frequency
+
+
+TRANSITION_TO_11_FREQUENCY_MODE_DATE = dt.date(2015, 6, 17)
+TRANSITION_TO_TRACK_MODE_DATE = dt.date(2017, 2, 7)
 
 
 def fit_gauss_coherence(frequencies_megahertz, coherence):
@@ -44,7 +49,10 @@ def find_max_track_frequencies(frequencies: Frequency, coherence: np.ndarray, cl
     max_freqs_args = []
     for freq_slice, value_slice in tqdm(zip(frequencies['MHz'], np.abs(coherence)),
                                         total=n_times, desc='Find maximum frequencies of track'):
-        max_freqs_args.append(fit_gauss_coherence(freq_slice, value_slice)[1].argmax())
+        if np.isnan(value_slice).any():
+            max_freqs_args.append(freq_slice.size // 2)
+        else:
+            max_freqs_args.append(fit_gauss_coherence(freq_slice, value_slice)[1].argmax())
 
     n_freqs = frequencies.shape[1]
     if clip_by is not None:
@@ -243,19 +251,21 @@ class SunPatternInfo(PickleLoadable):
             self.coherence = coherence
             self.parameters = params
 
-    def __init__(self, sun_track_data: PassiveTrack = None, scan_data: PassiveScan = None):
+    def __init__(self, *, sun_track_data: PassiveTrack = None, scan_data: PassiveScan = None):
         if (sun_track_data is None and scan_data is None) \
                 or (sun_track_data is not None and scan_data is not None):
             raise ValueError('Either sun track or scan data should be provided')
 
-        if sun_track_data.parameters.mode != PassiveMode.sun:
-            raise ValueError(f'Input data should be sun track, '
-                             f'but {sun_track_data.parameters.mode} was given.')
-
         if sun_track_data is not None:
+            if sun_track_data.parameters.mode != PassiveMode.sun:
+                raise ValueError(f'Input data should be sun track, '
+                                 f'but {sun_track_data.parameters.mode} was given.')
+
             track = sun_track_data
-        else:
+        elif scan_data is not None:
             track = self._extract_sun_track_from_scan_data(scan_data)
+        else:
+            raise AssertionError('Unexpected behavior')
 
         if len(track.dates) > 1:
             raise ValueError('Multiple dates processing not implemented')
@@ -305,37 +315,81 @@ class SunPatternInfo(PickleLoadable):
             self.sky_power[ch] = track_sky_noise * self.bin_band['Hz'] * Boltzmann
 
     def _extract_sun_track_from_scan_data(self, scan_data: PassiveScan) -> PseudoPassiveTrack:
-        # Find frequencies with expected maximum coherence for the Sun
-        expected_max_freqs = NotImplemented  # type: Frequency
+        # Find frequencies with expected maximum power from a source at the position of the Sun
+        expected_max_freqs = find_sun_max_frequencies(scan_data.time_marks)
+
         # Find arguments of frequencies, closest to the found maximum, in the scan data
         args = self._find_closest(expected_max_freqs['MHz'], scan_data.frequencies['MHz'])
-        closest_freqs = Frequency(scan_data.frequencies['MHz'][args], 'MHz')
 
         # Cut the 1 MHz Sun track from coherence and power data
         margin_frequency = 1  # MHz
         freq_delta = scan_data.frequencies['MHz'][1] - scan_data.frequencies['MHz'][0]
         margin = int(margin_frequency / freq_delta)
-        half_margin = margin / 2
 
-        shape = len(scan_data.time_marks), scan_data.frequencies.size
-        frequencies = np.empty(shape)
-        coherence = np.empty(shape)
-        spectra = {ch: np.empty(shape) for ch in scan_data.parameters.channels}
+        if margin % 2 == 0:
+            margin_args = [margin // 2, margin // 2]
+        else:
+            margin_args = [margin // 2, margin // 2 + 1]
 
-        for arg in args:
-            sl = slice(arg - half_margin, arg + half_margin)
-            frequencies[arg] = scan_data.frequencies['MHz'][sl]
-            coherence[arg] = scan_data.coherence[arg, sl]
+        shape = len(scan_data.time_marks), margin
+        # Frequencies should not have nans
+        frequencies = np.stack(
+            [np.linspace(152, 152 + margin * freq_delta, margin, endpoint=False)
+             for _ in range(shape[0])]
+        )
+
+        coherence = np.full(shape, np.nan, dtype=np.complex)
+        spectra = {ch: np.full(shape, np.nan, dtype=np.float)
+                   for ch in scan_data.parameters.channels}
+        n_scan_freqs = scan_data.frequencies.size
+
+        for time_num, arg in enumerate(args):
+            if arg == 0 or arg == n_scan_freqs - 1:
+                # Then our track is out of range
+                continue
+
+            low_old = max(arg - margin_args[0], 0)
+            upp_old = min(arg + margin_args[1], n_scan_freqs)
+            sl_old = slice(low_old, upp_old)
+
+            low_new = max(-(arg - margin_args[1]), 0)
+            upp_new = margin - max(arg + margin_args[1] - n_scan_freqs, 0)
+            sl_new = slice(low_new, upp_new)
+
+            # Extrapolate frequencies if some indexes fell out of range
+            if sl_old.stop - sl_old.start == margin:
+                frequencies[time_num] = scan_data.frequencies['MHz'][sl_old]
+            elif upp_old == n_scan_freqs:
+                # Upper boundary
+                low_freq = scan_data.frequencies['MHz'][low_old]
+                upp_freq = low_freq + margin * freq_delta
+                frequencies[time_num] = np.linspace(low_freq, upp_freq, margin, endpoint=False)
+            else:
+                # Lower boundary
+                upp_freq = scan_data.frequencies['MHz'][upp_old]
+                low_freq = upp_freq - (margin - 1) * freq_delta
+                frequencies[time_num] = np.linspace(low_freq, upp_freq, margin)
+
+            coherence[time_num, sl_new] = scan_data.coherence[time_num, sl_old]
             for ch in scan_data.parameters.channels:
-                spectra[ch][arg] = scan_data.spectra[ch][arg, sl]
+                spectra[ch][time_num, sl_new] = scan_data.spectra[ch][time_num, sl_old]
         frequencies = Frequency(frequencies, 'MHz')
 
+        scan_params = scan_data.parameters
+        params = PassiveTrackParameters(
+            mode=PassiveMode.sun,
+            sampling_frequency=scan_params.sampling_frequency,
+            n_accumulation=scan_params.n_accumulation,
+            n_fft=margin,
+            channels=scan_params.channels,
+            band_type=scan_params.band_type
+        )
         return self.PseudoPassiveTrack(scan_data.dates, scan_data.time_marks,
-                                       frequencies, spectra, coherence, s)
+                                       frequencies, spectra, coherence, params)
 
     @staticmethod
     def _find_closest(ref1d, values2d):
-        return np.argmin(np.abs(values2d - ref1d), axis=1)
+        return np.argmin(np.abs(values2d - ref1d[:, None]), axis=1)
 
     def save_pickle(self, data_manager: DataManager, subfolders: List[str] = None):
         dirpath = data_manager.get_postproc_folder_path(self.date, subfolders=subfolders)

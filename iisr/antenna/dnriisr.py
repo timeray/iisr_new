@@ -5,6 +5,8 @@ Scatter Radar (IISR).
 
 from pathlib import Path
 import ctypes as ct
+from typing import Union
+
 from scipy.integrate import simps
 from functools import lru_cache
 import numpy as np
@@ -303,6 +305,11 @@ def ant_max_direction(freq, fit='Lebedev_model'):
     ep: array-like or number
         Epsilon of antenna coordinates, rad.
     """
+    freq_range = (152, 164)
+    freq = np.asarray(freq)
+    freq[freq < freq_range[0]] = np.nan
+    freq[freq > freq_range[1]] = np.nan
+
     if fit == 'Lebedev':
         freq_kilohertz = freq * 1e3  # to kHz, to float
         dep = 0.2816
@@ -312,9 +319,9 @@ def ant_max_direction(freq, fit='Lebedev_model'):
              - 2.102600271E-010 * freq_kilohertz**3 \
              + 3.453540782E-016 * freq_kilohertz**4
         ep += dep
-        return np.deg2rad(ep)
+        res = np.deg2rad(ep)
     elif fit == 'Lebedev_model':
-        return ant_max_direction_model_c_wrapped(freq * 1000.0)
+        res = ant_max_direction_model_c_wrapped(freq * 1000.0)
     elif fit in ['Vasiliev_old', 'Vasiliev']:
         freq_hz = freq * 1e6  # to kHz, to float
         d = 0.87
@@ -337,9 +344,39 @@ def ant_max_direction(freq, fit='Lebedev_model'):
 
         g = hi_f * np.sqrt(1 + ((a / (a + b)) * np.tan(k * h)) ** 2)
         theta = g - wavelength / d
-        return theta
+        res = theta
     else:
         raise ValueError('Incorrect fit: {}'.format(fit))
+
+    if res.size == 1:
+        return res.item()
+    else:
+        return res
+
+
+def freq_max_direction(ep: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+    """Return frequency at which given epsilon is a coordinate of pattern maximum.
+
+    Args:
+        ep: array-like or number
+            Epsilon coordinate of antenna maximum, rad.
+
+    Returns:
+        freq: array-like or number
+            Frequency, MHz.
+
+    """
+    eps_range = [-0.1, 0.728]
+    ep = np.asarray(ep)
+    ep[ep < eps_range[0]] = np.nan
+    ep[ep > eps_range[1]] = np.nan
+
+    coefs = [2.6391387779, -4.4269604510, -4.3101746665, 18.2875809605, 153.9381333482]
+    res = np.polyval(coefs, ep)
+    if res.size == 1:
+        return res.item()
+    else:
+        return res
 
 
 def obs2tar_position(ep, gam, distance, lat=IISR_LAT, lon=IISR_LON,
@@ -578,3 +615,15 @@ def calc_directivity_approximation():
         coefs_str = [f'{c:.10f}' for c in coefs]
         print(f'Polyfit coefficients for {dnr_type} horn = {", ".join(coefs_str)}'
               f' with residuals = {residuals.item():.20f}', file=sys.stderr)
+
+
+def calc_freq_max_direction():
+    n = 100
+    freq_megahertz = np.linspace(152, 164, n)
+
+    print('Approximate frequency at maximal direction')
+    eps = ant_max_direction(freq_megahertz)
+    coefs, residuals, _, _, _ = np.polyfit(eps, freq_megahertz, deg=4, full=True)
+    coefs_str = [f'{c:.10f}' for c in coefs]
+    print(f'Polyfit coefficients {", ".join(coefs_str)} '
+          f'with residuals = {residuals.item():.20f}', file=sys.stderr)

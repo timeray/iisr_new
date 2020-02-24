@@ -10,7 +10,8 @@ from astropy.time import Time
 from scipy.integrate import simps
 from tqdm import tqdm
 
-from iisr.antenna.dnriisr import IISR_LAT, IISR_LON, IISR_HEIGHT, calc_pattern, topoc2ant
+from iisr.antenna.dnriisr import IISR_LAT, IISR_LON, IISR_HEIGHT, calc_pattern, topoc2ant, \
+    freq_max_direction
 from iisr.antenna.sun_utils import get_smoothed_elliptic_sun, SUN_INTEGRATION_REGION, \
     DEFAULT_SUN_FWHM
 from iisr.math import axis_angle, rotate_vector, spherical2cartesian, cartesian2spherical, \
@@ -251,3 +252,17 @@ def sun_pattern_1d(time_marks: np.ndarray, freqs: Frequency, dnr_type: str, kern
         convolved_patterns.append(conv_pat)
 
     return np.array(patterns), np.array(convolved_patterns)
+
+
+def find_sun_max_frequencies(time_marks: np.ndarray) -> Frequency:
+    """Return frequency at which the Sun's position epsilon is equal to epsilon at
+    maximal pattern direction"""
+    sun_coord = get_sun(Time(time_marks))
+
+    radar_loc = EarthLocation(lat=IISR_LAT * u.rad, lon=IISR_LON * u.rad, height=IISR_HEIGHT)
+    observer_altaz = AltAz(location=radar_loc, obstime=time_marks)
+
+    sun_coord_altaz = sun_coord.transform_to(observer_altaz)
+
+    _, eps = topoc2ant(sun_coord_altaz.alt.radian, sun_coord_altaz.az.radian)
+    return Frequency(freq_max_direction(eps), 'MHz')

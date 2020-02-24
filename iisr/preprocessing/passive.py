@@ -166,12 +166,22 @@ class PassiveScanBatchResult(PassiveResult):
 
 
 class PassiveScan(PassiveResult):
-    def __init__(self, parameters: PassiveScanParameters,
-                 frequencies: Frequency,
-                 batch_results: List[PassiveScanBatchResult]):
+    def __init__(self, parameters: PassiveScanParameters, dates: List[dt.date],
+                 frequencies: Frequency, time_marks: np.ndarray,
+                 spectra: Dict[Channel, np.ndarray], coherence: np.ndarray):
         super().__init__(parameters)
+        self.dates = dates
+        self.frequencies = frequencies
+        self.time_marks = time_marks
+        self.spectra = spectra
+        self.coherence = coherence
+
+    @classmethod
+    def from_batch_results(cls, parameters: PassiveScanParameters,
+                           frequencies: Frequency,
+                           batch_results: List[PassiveScanBatchResult]):
         time_marks = []
-        spectra = {ch: [] for ch in self.parameters.channels}
+        spectra = {ch: [] for ch in parameters.channels}
         coherence = []
 
         for result in batch_results:
@@ -180,11 +190,62 @@ class PassiveScan(PassiveResult):
                 spectra[ch].append(sp)
             coherence.append(result.coherence)
 
-        self.time_marks = np.array(time_marks, dtype=dt.datetime)
-        self.frequencies = frequencies
-        self.spectra = {ch: np.array(spectra[ch]) for ch in spectra}
-        self.coherence = np.array(coherence)
-        self.dates = sorted(set(tm.date() for tm in time_marks))
+        time_marks = np.array(time_marks, dtype=dt.datetime)
+        frequencies = frequencies
+        spectra = {ch: np.array(spectra[ch]) for ch in spectra}
+        coherence = np.array(coherence)
+        dates = sorted(set(tm.date() for tm in time_marks))
+        return cls(parameters, dates, frequencies, time_marks, spectra, coherence)
+
+    @classmethod
+    def from_riometer_data(cls, filepath: Path):
+        if not filepath.exists():
+            raise ValueError(f'File {filepath} not exists')
+
+        channels = Channel(0), Channel(2)
+        sampling_frequency = Frequency(1, 'MHz')
+        n_accumulation = 999
+        n_fft = -1
+
+        def to_datetime(_year, _month, _day, _float_hour):
+            return dt.datetime(_year, _month, _day) + dt.timedelta(hours=_float_hour)
+
+        vals = np.loadtxt(str(filepath), delimiter=' ')
+        vals = vals[vals[:, 3] != -1]
+
+        assert np.unique(vals[:, 2]).size == 1, 'Data contain more then single date'
+        date = dt.date(vals[0, 0], vals[0, 1], vals[0, 2])
+        dates = [date]
+
+        frequencies = Frequency(np.unique(vals[:, 4]), 'kHz')
+        freq_index = {val: num for num, val in enumerate(frequencies['kHz'])}
+
+        unique_hours = np.unique(vals[:, 3])
+        time_index = {val: num for num, val in enumerate(unique_hours)}
+
+        time_marks = np.empty(len(unique_hours), dtype=dt.datetime)
+        for num, h in enumerate(unique_hours):
+            time_marks[num] = to_datetime(date.year, date.month, date.day, h)
+
+        shape = len(unique_hours), frequencies.size
+        coherence = np.empty(shape, dtype=np.complex)
+        spectra = {ch: np.empty(shape, dtype=np.float) for ch in channels}
+        for hour, freq, sp_ch0, sp_ch2, coh_mag, coh_phase in vals[:, []]:
+            tidx = time_index[hour]
+            fidx = freq_index[freq]
+            coherence[tidx, fidx] = coh_mag * np.exp(1j * coh_phase)
+            spectra[Channel(0)][tidx, fidx] = sp_ch0
+            spectra[Channel(2)][tidx, fidx] = sp_ch2
+
+        pars = PassiveScanParameters(
+            sampling_frequency=sampling_frequency,
+            n_accumulation=n_accumulation,
+            n_fft=n_fft,
+            central_frequencies=[Frequency(x, 'kHz') for x in frequencies['kHz']],
+            channels=channels,
+            band_type='narrow'
+        )
+        return cls(pars, dates, frequencies, time_marks, spectra, coherence)
 
 
 class PassiveTrackBatchResult:
@@ -465,7 +526,8 @@ class PassiveScanHandler(PassiveHandler):
         )
 
     def finish(self):
-        result = PassiveScan(self.parameters, self.frequencies, self.intermediate_results)
+        result = PassiveScan.from_batch_results(self.parameters, self.frequencies,
+                                                self.intermediate_results)
         del self.intermediate_results
         return result
 

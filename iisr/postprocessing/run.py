@@ -3,7 +3,7 @@ import datetime as dt
 
 from iisr.data_manager import DataManager
 from iisr.postprocessing.passive import SourceTrackInfo, SkyPowerInfo, CalibrationInfo, \
-    SunPatternInfo, SunFluxInfo
+    SunPatternInfo, SunFluxInfo, TRANSITION_TO_TRACK_MODE_DATE
 from iisr.preprocessing.passive import PassiveTrack, PassiveScan
 from iisr.preprocessing.passive import PassiveMode
 
@@ -96,17 +96,27 @@ def perform_calibration(date: dt.date, preproc_subfolder: str = '',
 def compute_sun_pattern(date: dt.date, preproc_subfolder: str = '', save_subfolder: str = None):
     logging.info(f'Perform computation of sun pattern for {date}')
     with DataManager() as manager:
-        scan_dir = manager.get_preproc_folder_path(date, subfolders=[preproc_subfolder])
+        data_dir = manager.get_preproc_folder_path(date, subfolders=[preproc_subfolder])
 
-        sun_track_filename = PassiveScan.save_name_fmt.format(PassiveMode.sun, 'wide') + '.pkl'
-        sun_track_filepath = scan_dir / sun_track_filename
-        if sun_track_filepath.exists():
-            sun_track_data = PassiveTrack.load_pickle(sun_track_filepath)
+        if date >= TRANSITION_TO_TRACK_MODE_DATE:
+            filename = PassiveTrack.save_name_fmt.format(PassiveMode.sun, 'wide') + '.pkl'
+            sun_track_filepath = data_dir / filename
+            if sun_track_filepath.exists():
+                sun_track_data = PassiveTrack.load_pickle(sun_track_filepath)
+            else:
+                logging.error(f'Sun track result at path {sun_track_filepath} not exist.')
+                return
+            sun_pattern = SunPatternInfo(sun_track_data=sun_track_data)
         else:
-            logging.error(f'Sun track result at path {sun_track_filepath} not exist.')
-            return
+            filename = PassiveScan.save_name_fmt.format(PassiveMode.scan, 'wide') + '.pkl'
+            scan_filepath = data_dir / filename
+            if scan_filepath.exists():
+                scan_data = PassiveScan.load_pickle(scan_filepath)
+            else:
+                logging.error(f'Scan result at path {scan_filepath} not exist.')
+                return
+            sun_pattern = SunPatternInfo(scan_data=scan_data)
 
-        sun_pattern = SunPatternInfo(sun_track_data)
         sun_pattern.save_pickle(manager, subfolders=[save_subfolder])
         return sun_pattern
 
