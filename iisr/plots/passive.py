@@ -149,12 +149,14 @@ def plot_daily_spectra(scan: Optional[PassiveScan], tracks: List[PassiveTrack], 
         ax = plt.subplot(111)  # type: plt.Axes
 
         if level is None:
-            level = PlotHelper.autolevel(np.ma.concatenate([sp.ravel() for sp in spectrum]))
+            low, upp = PlotHelper.autolevel(np.ma.concatenate([sp.ravel() for sp in spectrum]))
+        else:
+            low, upp = level
 
         for dt_, fr, sp in zip(dtimes, freqs, spectrum):
             dt_ = PlotHelper.pcolor_adjust_coordinates(dt_)
             fr = PlotHelper.pcolor_adjust_coordinates(fr['MHz'])
-            pcm = ax.pcolormesh(dt_, fr.T, sp.T, vmin=level[0], vmax=level[1], cmap=cmap)
+            pcm = ax.pcolormesh(dt_, fr.T, sp.T, vmin=low, vmax=upp, cmap=cmap)
 
         PlotHelper.set_time_ticks(ax, with_date=True)
         ax.set_xlim(PlotHelper.lim_daily(np.concatenate([dt_ for dt_ in dtimes])))

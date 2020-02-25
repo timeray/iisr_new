@@ -83,7 +83,7 @@ class PassiveScanParameters(PassiveParameters):
                       'central_frequencies', 'channels', 'band_type']
 
     def __init__(self, sampling_frequency: Frequency, n_accumulation: int,
-                 n_fft: int, central_frequencies: Iterable[Frequency], channels: List[Channel],
+                 n_fft: int, central_frequencies: Iterable[Frequency], channels: Iterable[Channel],
                  band_type: str):
         self.mode = PassiveMode.scan
         self.sampling_frequency = sampling_frequency
@@ -199,8 +199,11 @@ class PassiveScan(PassiveResult):
 
     @classmethod
     def from_riometer_data(cls, filepath: Path):
+        """Parse riometer data to get PassiveScan result. Parameters, that cannot be deduced from
+        the file, will be filled with blank values. filepath can be a 'gz' archive, because
+        numpy.loadtxt will automatically decompress it."""
         if not filepath.exists():
-            raise ValueError(f'File {filepath} not exists')
+            raise FileNotFoundError(f'{filepath}')
 
         channels = Channel(0), Channel(2)
         sampling_frequency = Frequency(1, 'MHz')
@@ -210,11 +213,12 @@ class PassiveScan(PassiveResult):
         def to_datetime(_year, _month, _day, _float_hour):
             return dt.datetime(_year, _month, _day) + dt.timedelta(hours=_float_hour)
 
+        logging.info(f'Load riometer data {filepath}')
         vals = np.loadtxt(str(filepath), delimiter=' ')
-        vals = vals[vals[:, 3] != -1]
+        vals = vals[vals[:, 4] != -1.0]
 
         assert np.unique(vals[:, 2]).size == 1, 'Data contain more then single date'
-        date = dt.date(vals[0, 0], vals[0, 1], vals[0, 2])
+        date = dt.date(int(vals[0, 0]), int(vals[0, 1]), int(vals[0, 2]))
         dates = [date]
 
         frequencies = Frequency(np.unique(vals[:, 4]), 'kHz')
@@ -230,10 +234,10 @@ class PassiveScan(PassiveResult):
         shape = len(unique_hours), frequencies.size
         coherence = np.empty(shape, dtype=np.complex)
         spectra = {ch: np.empty(shape, dtype=np.float) for ch in channels}
-        for hour, freq, sp_ch0, sp_ch2, coh_mag, coh_phase in vals[:, []]:
+        for hour, freq, sp_ch0, sp_ch2, coh_mag, coh_phase in vals[:, [3, 4, 8, 12, 16, 19]]:
             tidx = time_index[hour]
             fidx = freq_index[freq]
-            coherence[tidx, fidx] = coh_mag * np.exp(1j * coh_phase)
+            coherence[tidx, fidx] = coh_mag * np.exp(1j * np.deg2rad(coh_phase))
             spectra[Channel(0)][tidx, fidx] = sp_ch0
             spectra[Channel(2)][tidx, fidx] = sp_ch2
 

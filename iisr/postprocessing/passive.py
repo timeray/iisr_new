@@ -14,7 +14,7 @@ from scipy.interpolate import interp1d
 from iisr.antenna.dnriisr import approximate_directivity
 from iisr.antenna.sky_noise import SkyNoiseInterpolator
 from iisr.antenna.radio_sources import GaussianKernel, sun_pattern_1d, find_sun_max_frequencies
-from iisr.fitting import fit_sky_noise_2d, fit_gauss
+from iisr.fitting import fit_sky_noise_2d, fit_gauss, fit_sky_noise_1d
 from iisr.preprocessing.passive import PassiveScan, PassiveTrack, PassiveMode, \
     PassiveTrackParameters
 from iisr.data_manager import DataManager
@@ -128,7 +128,8 @@ class SkyPowerInfo(PickleLoadable):
 
 
 class CalibrationInfo(PickleLoadable):
-    FitResult2d = namedtuple('FitResults1d', ['dtimes', 'gains', 'biases', 'gain_params'])
+    FitResult1d = namedtuple('FitResults1d', ['gains', 'biases'])
+    FitResult2d = namedtuple('FitResults2d', ['dtimes', 'gains', 'biases', 'gain_params'])
 
     def __init__(self, scan_data: PassiveScan, sky_power: SkyPowerInfo, method: str = 'simple_fit'):
         for ch in scan_data.spectra.keys():
@@ -148,7 +149,12 @@ class CalibrationInfo(PickleLoadable):
             np.array([f['Hz'] for f in scan_data.parameters.central_frequencies]),
             'Hz'
         )
-        self.band_masks = self._get_band_masks()
+        if self.frequencies.size == self.central_frequencies.size:
+            self.apply_1d_fit = True
+            self.band_masks = None
+        else:
+            self.apply_1d_fit = False
+            self.band_masks = self._get_band_masks()
 
         # Calculate sky noise power for given date
         sky_power = sky_power.values
@@ -157,9 +163,15 @@ class CalibrationInfo(PickleLoadable):
         fit_result = {}
         for ch in scan_data.parameters.channels:
             spectrum = scan_data.spectra[ch]
-            fit_result[ch] = self._fit2d(
-                scan_data.time_marks, spectrum, sky_power[ch], time_masks=~np.isnan(spectrum)
-            )
+
+            if self.apply_1d_fit:
+                fit_result[ch] = self._fit1d(
+                    scan_data.time_marks, spectrum, sky_power[ch], time_mask=~np.isnan(spectrum)
+                )
+            else:
+                fit_result[ch] = self._fit2d(
+                    scan_data.time_marks, spectrum, sky_power[ch], time_mask=~np.isnan(spectrum)
+                )
         self.gains = {ch: result.gains for ch, result in fit_result.items()}
         self.biases = {ch: result.biases for ch, result in fit_result.items()}
 
@@ -173,18 +185,37 @@ class CalibrationInfo(PickleLoadable):
         )
         return [freq_band_nums == band_num for band_num in range(self.central_frequencies.size)]
 
+    def _fit1d(self, time_marks: np.ndarray, spectrum: np.ndarray, sky_noise: np.ndarray,
+               time_mask=None, window=None, timeout=None):
+        gains = []
+        biases = []
+
+        if time_mask is None:
+            time_mask = np.ones_like(time_marks, dtype=bool)
+
+        masked_data = np.ma.array(spectrum, mask=~time_mask)
+        masked_model = np.ma.array(sky_noise, mask=~time_mask)
+
+        for data, model in zip(masked_data.T, masked_model.T):
+            _, gain, bias, _ = fit_sky_noise_1d(time_marks, model, data,
+                                                window=window, timeout=timeout)
+            gains.append(gain)
+            biases.append(bias / gain)
+
+        return self.FitResult1d(np.array(gains), np.array(biases))
+
     def _fit2d(self, time_marks: np.ndarray, spectrum: np.ndarray, sky_noise: np.ndarray,
-               time_masks=None, window=None, timeout=None):
+               time_mask=None, window=None, timeout=None):
         regression_dtimes = []
         gains = []
         biases = []
         gain_params = []
 
-        if time_masks is None:
-            time_masks = np.ones_like(sky_noise, dtype=bool)
+        if time_mask is None:
+            time_mask = np.ones_like(sky_noise, dtype=bool)
 
-        masked_data = np.ma.array(spectrum, mask=~time_masks)
-        masked_model = np.ma.array(sky_noise, mask=~time_masks)
+        masked_data = np.ma.array(spectrum, mask=~time_mask)
+        masked_model = np.ma.array(sky_noise, mask=~time_mask)
 
         # Split spectrum by bands of each central frequency
         for band_num, central_freq_khz in enumerate(self.central_frequencies['kHz']):
