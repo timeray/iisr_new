@@ -175,8 +175,18 @@ class CalibrationInfo(PickleLoadable):
         self.gains = {ch: result.gains for ch, result in fit_result.items()}
         self.biases = {ch: result.biases for ch, result in fit_result.items()}
 
+        self.gains = {ch: np.ma.array(a, mask=np.isnan(a)) for ch, a in self.gains.items()}
+        self.biases = {ch: np.ma.array(a, mask=np.isnan(a)) for ch, a in self.biases.items()}
+
         self._gain_interpolators = {}
         self._bias_interpolators = {}
+
+        self.channels = scan_data.parameters.channels
+        self.time_marks = scan_data.time_marks
+        self.calibrated_spectra = {
+            ch: self.calibrate_power(ch, self.frequencies, scan_data.spectra[ch])
+            for ch in self.channels
+        }
 
     def _get_band_masks(self):
         central_frequencies_khz = self.central_frequencies['kHz']
@@ -242,14 +252,17 @@ class CalibrationInfo(PickleLoadable):
 
     def interpolate_gain(self, ch: Channel, frequencies: Frequency):
         if ch not in self._gain_interpolators:
-            self._gain_interpolators[ch] = interp1d(self.frequencies['MHz'], self.gains[ch],
+            mask = self.gains[ch].mask
+            self._gain_interpolators[ch] = interp1d(self.frequencies['MHz'][~mask],
+                                                    self.gains[ch].compressed(),
                                                     kind='cubic', bounds_error=False)
         return self._gain_interpolators[ch](frequencies['MHz'])
 
     def interpolate_bias(self, ch: Channel, frequencies: Frequency):
         if ch not in self._bias_interpolators:
-            self._bias_interpolators[ch] = interp1d(self.central_frequencies['MHz'],
-                                                    self.biases[ch],
+            mask = self.biases[ch].mask
+            self._bias_interpolators[ch] = interp1d(self.central_frequencies['MHz'][~mask],
+                                                    self.biases[ch].compressed(),
                                                     kind='cubic', bounds_error=False)
         return self._bias_interpolators[ch](frequencies['MHz'])
 

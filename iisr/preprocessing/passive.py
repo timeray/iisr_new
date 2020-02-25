@@ -205,7 +205,12 @@ class PassiveScan(PassiveResult):
         if not filepath.exists():
             raise FileNotFoundError(f'{filepath}')
 
-        channels = Channel(0), Channel(2)
+        mode = filepath.name.split('.')[0].split('_')[1]
+        assert mode in ['NR', 'WD']
+        if mode == 'NR':
+            channels = Channel(0), Channel(2)
+        else:
+            channels = Channel(1), Channel(3)
         sampling_frequency = Frequency(1, 'MHz')
         n_accumulation = 999
         n_fft = -1
@@ -238,8 +243,8 @@ class PassiveScan(PassiveResult):
             tidx = time_index[hour]
             fidx = freq_index[freq]
             coherence[tidx, fidx] = coh_mag * np.exp(1j * np.deg2rad(coh_phase))
-            spectra[Channel(0)][tidx, fidx] = sp_ch0
-            spectra[Channel(2)][tidx, fidx] = sp_ch2
+            spectra[channels[0]][tidx, fidx] = sp_ch0
+            spectra[channels[1]][tidx, fidx] = sp_ch2
 
         pars = PassiveScanParameters(
             sampling_frequency=sampling_frequency,

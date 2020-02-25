@@ -354,17 +354,79 @@ def plot_calibration(calib_info: CalibrationInfo, save_folder: Path, colored=Tru
         ax_gain.plot(frequencies['MHz'], gains[ch], label=ch_label.format(ch))
         ax_gain.set_title(gain_title)
         ax_gain.legend()
+        ax_gain.grid(True)
         ax_gain.set_xlim(*xlim)
 
         ax_bias = plt.subplot(212)  # type: plt.Axes
         ax_bias.plot(central_frequencies['MHz'], biases[ch], label=ch_label.format(ch))
         ax_bias.set_title(bias_title)
         ax_bias.legend()
+        ax_bias.grid(True)
         ax_bias.set_xlim(*xlim)
 
     plt.tight_layout()
 
     fig.savefig(save_folder / 'calibration.png')
+
+
+@plot_languages()
+def plot_absolute_daily_spectra(calib_info: CalibrationInfo, save_folder: Path, colored=True,
+                                figsize=FIGSIZE_ONELONG, timeout=dt.timedelta(minutes=10),
+                                level=None, language=None):
+    """
+    Plot overall calibrated spectra for passive data.
+    """
+    time_marks = calib_info.time_marks
+    freqs = calib_info.frequencies
+    spectra = calib_info.calibrated_spectra
+
+    time_marks, freqs, spectra = _split_scan_by_timeout(time_marks, freqs, spectra, timeout=timeout)
+
+    for sp in spectra.values():
+        for i in range(len(sp)):
+            sp[i] = np.ma.array(sp[i], mask=np.isnan(sp[i]))
+
+    if colored:
+        cmap = None
+    else:
+        cmap = 'gray'
+
+    for ch, spectrum in spectra.items():
+        fig = plt.figure(figsize=figsize)
+        ax = plt.subplot(111)  # type: plt.Axes
+
+        if level is None:
+            low, upp = PlotHelper.autolevel(np.ma.concatenate([sp.ravel() for sp in spectrum]))
+        else:
+            low, upp = level
+
+        for tm, fr, sp in zip(time_marks, freqs, spectrum):
+            tm = PlotHelper.pcolor_adjust_coordinates(tm)
+            fr = PlotHelper.pcolor_adjust_coordinates(fr['MHz'])
+            pcm = ax.pcolormesh(tm, fr.T, sp.T, vmin=low, vmax=upp, cmap=cmap)
+
+        PlotHelper.set_time_ticks(ax, with_date=True)
+        ax.set_xlim(PlotHelper.lim_daily(np.concatenate([tm for tm in time_marks])))
+
+        title = lang_string({'ru': 'Принятая мощность, Вт',
+                             'en': 'Received power, W'}, language)
+        ax.set_title(title)
+        xlabel = lang_string({'ru': 'Время, UT', 'en': 'Time, UT'}, language)
+        ax.set_xlabel(xlabel)
+        ylabel = lang_string({'ru': 'Частота, МГц', 'en': 'Frequency, MHz'},
+                             language)
+        ax.set_ylabel(ylabel)
+
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes('right', size='5%', pad=0.05)
+
+        plt.colorbar(pcm, cax=cax)
+        fig.tight_layout()
+
+        save_name = 'calibrated_spectra_ch{}'.format(ch)
+        fig.savefig(save_folder / save_name)
+
+        plt.close(fig)
 
 
 @plot_languages()

@@ -88,6 +88,7 @@ def plot_calibration(manager: DataManager, date: dt.date,
 
     logging.info('Plot calibration')
     pp.plot_calibration(calibration_info, save_folder=save_dir)
+    pp.plot_absolute_daily_spectra(calibration_info, save_folder=save_dir)
 
 
 def plot_sun_pattern_vs_power(manager: DataManager, date: dt.date,
