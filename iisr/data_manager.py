@@ -1,10 +1,11 @@
 """
 Manages output files and results of processing.
 """
-from typing import IO, List
+from collections import namedtuple
+from typing import List, Dict
 
 import os
-import sys
+import logging
 from pathlib import Path
 import configparser
 import datetime as dt
@@ -28,9 +29,13 @@ class DataManager:
     PREPROCESSING_FOLDER_NAME = 'pre_proc'
     FIGURES_FOLDER_NAME = 'Figures'
     POSTPROCESSING_FOLDER_NAME = 'post_proc'
+    RIOMETER_EXTENSIONS = ('.dat', '.dat.gz')
+    RiometerIndex = namedtuple('RiomterIndex', ['date', 'mode'])
+    RIOMETER_DATE_FMT = '%Y%m%d'
 
     def __init__(self, main_folder_path: Path = CONFIG_MAIN_FOLDER,
-                 create_main_folder: bool = True):
+                 create_main_folder: bool = True,
+                 riometer_data_folder: Path = None):
         """
 
         Args:
@@ -39,6 +44,13 @@ class DataManager:
         # Main folder is created on demand
         self.main_folder = main_folder_path
         self.created_folders = []  # type: List[Path]
+        self.riometer_data_folder = riometer_data_folder
+        self.riometer_register = {}  # type: Dict['RiometerIndex', Path]
+        if riometer_data_folder is not None:
+            if not riometer_data_folder.exists():
+                raise ValueError(f'Given riometer data folder ({riometer_data_folder}) not exists')
+            self.make_riometer_register()
+
         if create_main_folder:
             self._check_main_folder()
 
@@ -58,6 +70,16 @@ class DataManager:
         elif not self.main_folder.is_dir():
             raise NotADirectoryError('{}'.format(self.main_folder))
 
+    def make_riometer_register(self):
+        logging.info('Create riometer data files registry')
+        for dirpath, _, filenames in os.walk(str(self.riometer_data_folder)):
+            for filename in filenames:
+                if filename.endswith(self.RIOMETER_EXTENSIONS):
+                    date_str, mode_str, _ = filename.split('.')[0].split('_')
+                    date = dt.datetime.strptime(date_str, self.RIOMETER_DATE_FMT).date()
+                    filepath = Path(dirpath) / filename
+                    self.riometer_register[self.RiometerIndex(date, mode_str)] = filepath
+
     def get_preproc_folder_path(self, date: dt.date = None, subfolders: List[str] = None,
                                 create_new_folders: bool = True) -> Path:
         if subfolders is None:
@@ -71,6 +93,13 @@ class DataManager:
             subfolders = []
         return self.get_folder_path(date, subfolders=[self.POSTPROCESSING_FOLDER_NAME] + subfolders,
                                     create_new_folders=create_new_folders)
+
+    def get_riometer_filepath(self, date: dt.date, mode: str) -> Path:
+        if self.riometer_data_folder is None:
+            raise RuntimeError('Cannot return riometer filepath, because directory was not set')
+        assert mode in ['wide', 'narrow']
+        mode = 'WD' if mode == 'wide' else 'NR'
+        return self.riometer_register[self.RiometerIndex(date, mode)]
 
     def get_figures_folder_path(self, date: dt.date = None, subfolders: List[str] = None,
                                 create_new_folders: bool = True) -> Path:

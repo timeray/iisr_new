@@ -2,8 +2,10 @@ import sys
 import logging
 import configparser
 import argparse
+from pathlib import Path
 
 import iisr.config_utils as cu
+from iisr.data_manager import DataManager
 from iisr.plots.run import *
 from iisr import IISR_PATH
 
@@ -35,31 +37,35 @@ def main(argv=None):
     pre_subfolder = cfg_common['preprocessing_subfolder']
     post_subfolder = cfg_common['postprocessing_subfolder']
     figures_subfolder = cfg_common['figures_subfolder']
+    riometer_data_dirpath = cfg_common['riometer_data_dirpath']
+    riometer_data_dirpath = Path(riometer_data_dirpath) if riometer_data_dirpath else None
     mode = args.mode
 
-    if mode == 'spectra_coherence':
-        for date in dates:
-            plot_spectra_and_coherence(date, data_subfolder=pre_subfolder,
-                                       figures_subfolder=figures_subfolder)
-    elif mode == 'track':
-        for date in dates:
-            plot_processed_tracks(date, data_subfolder=post_subfolder,
-                                  figures_subfolder=figures_subfolder)
-    elif mode == 'sky_power':
-        for date in dates:
-            plot_sky_power(date, data_subfolder=post_subfolder,
-                           figures_subfolder=figures_subfolder)
-    elif mode == 'calibration':
-        for date in dates:
-            plot_calibration(date, data_subfolder=post_subfolder,
-                             figures_subfolder=figures_subfolder)
-    elif mode == 'sun_pattern':
-        for date in dates:
-            plot_sun_pattern_vs_power(date, data_subfolder=post_subfolder,
+    with DataManager(riometer_data_folder=riometer_data_dirpath) as manager:
+        if mode == 'spectra_coherence':
+            for date in dates:
+                plot_spectra_and_coherence(manager, date, data_subfolder=pre_subfolder,
+                                           figures_subfolder=figures_subfolder)
+        elif mode == 'track':
+            for date in dates:
+                plot_processed_tracks(manager, date, data_subfolder=post_subfolder,
                                       figures_subfolder=figures_subfolder)
-    elif mode == 'sun_flux':
-        for date in dates:
-            plot_sun_flux(date, data_subfolder=post_subfolder, figures_subfolder=figures_subfolder)
+        elif mode == 'sky_power':
+            for date in dates:
+                plot_sky_power(manager, date, data_subfolder=post_subfolder,
+                               figures_subfolder=figures_subfolder)
+        elif mode == 'calibration':
+            for date in dates:
+                plot_calibration(manager, date, data_subfolder=post_subfolder,
+                                 figures_subfolder=figures_subfolder)
+        elif mode == 'sun_pattern':
+            for date in dates:
+                plot_sun_pattern_vs_power(manager, date, data_subfolder=post_subfolder,
+                                          figures_subfolder=figures_subfolder)
+        elif mode == 'sun_flux':
+            for date in dates:
+                plot_sun_flux(manager, date,
+                              data_subfolder=post_subfolder, figures_subfolder=figures_subfolder)
 
     logging.info('Plotting done.')
 

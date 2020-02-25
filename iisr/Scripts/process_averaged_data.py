@@ -6,9 +6,11 @@ import configparser
 import sys
 import logging
 import argparse
+from pathlib import Path
 
 from iisr import IISR_PATH
 import iisr.config_utils as cu
+from iisr.data_manager import DataManager
 from iisr.postprocessing.run import compute_source_track, compute_sky_power, perform_calibration, \
     compute_sun_pattern, compute_sun_flux
 
@@ -36,25 +38,28 @@ def main(argv=None):
 
     cfg_common = config['Common']
     dates = cu.parse_dates_ranges(cfg_common['dates'])
+    riometer_data_dirpath = cfg_common['riometer_data_dirpath']
+    riometer_data_dirpath = Path(riometer_data_dirpath) if riometer_data_dirpath else None
     subfolder_pre = cfg_common['preprocessing_subfolder']
     subfolder_post = cfg_common['postprocessing_subfolder']
 
-    mode = args.mode
-    if mode == 'track':
-        for date in dates:
-            compute_source_track(date, subfolder_pre, subfolder_post)
-    elif mode == 'sky_power':
-        for date in dates:
-            compute_sky_power(date, subfolder_pre, subfolder_post)
-    elif mode == 'calibration':
-        for date in dates:
-            perform_calibration(date, subfolder_pre, subfolder_post, subfolder_post)
-    elif mode == 'sun_pattern':
-        for date in dates:
-            compute_sun_pattern(date, subfolder_pre, subfolder_post)
-    elif mode == 'sun_flux':
-        for date in dates:
-            compute_sun_flux(date, subfolder_pre, subfolder_post, subfolder_post)
+    with DataManager(riometer_data_folder=riometer_data_dirpath) as manager:
+        mode = args.mode
+        if mode == 'track':
+            for date in dates:
+                compute_source_track(manager, date, subfolder_pre, subfolder_post)
+        elif mode == 'sky_power':
+            for date in dates:
+                compute_sky_power(manager, date, subfolder_pre, subfolder_post)
+        elif mode == 'calibration':
+            for date in dates:
+                perform_calibration(manager, date, subfolder_pre, subfolder_post, subfolder_post)
+        elif mode == 'sun_pattern':
+            for date in dates:
+                compute_sun_pattern(manager, date, subfolder_pre, subfolder_post)
+        elif mode == 'sun_flux':
+            for date in dates:
+                compute_sun_flux(manager, date, subfolder_pre, subfolder_post, subfolder_post)
 
     logging.info('Postprocessing done.')
 
