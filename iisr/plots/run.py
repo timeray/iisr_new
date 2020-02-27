@@ -88,6 +88,7 @@ def plot_calibration(manager: DataManager, date: dt.date,
 
     logging.info('Plot calibration')
     pp.plot_calibration(calibration_info, save_folder=save_dir)
+    pp.plot_calibration_filter_mask(calibration_info, save_folder=save_dir)
     pp.plot_absolute_daily_spectra(calibration_info, save_folder=save_dir)
 
 
@@ -99,12 +100,13 @@ def plot_sun_pattern_vs_power(manager: DataManager, date: dt.date,
     filepath = data_dir / f'sun_pattern_gaussian_kernel.pkl'
 
     if filepath.exists():
-        track = SunPatternInfo.load_pickle(filepath)
+        sun_pattern = SunPatternInfo.load_pickle(filepath)
     else:
         raise FileNotFoundError(f'No sun track for given date {date}, dirpath={data_dir}')
 
     logging.info('Plot sun pattern info')
-    pp.plot_sun_pattern_vs_power(track, save_folder=save_dir)
+    pp.plot_sun_pattern_vs_power(sun_pattern, save_folder=save_dir)
+    pp.plot_tracks_with_fitted_position(sun_pattern, save_folder=save_dir)
 
 
 def plot_sun_flux(manager: DataManager, date: dt.date,

@@ -370,6 +370,44 @@ def plot_calibration(calib_info: CalibrationInfo, save_folder: Path, colored=Tru
 
 
 @plot_languages()
+def plot_calibration_filter_mask(calib_info: CalibrationInfo, save_folder: Path,
+                                figsize=FIGSIZE_ONELONG, timeout=dt.timedelta(minutes=10),
+                                language=None):
+    time_marks = calib_info.time_marks
+    freqs = calib_info.frequencies
+    masks = calib_info.valid_masks
+
+    time_marks, freqs, masks = _split_scan_by_timeout(time_marks, freqs, masks, timeout=timeout)
+    for ch, mask in masks.items():
+        fig = plt.figure(figsize=figsize)
+        ax = plt.subplot(111)  # type: plt.Axes
+
+        for tm, fr, m in zip(time_marks, freqs, mask):
+            tm = PlotHelper.pcolor_adjust_coordinates(tm)
+            fr = PlotHelper.pcolor_adjust_coordinates(fr['MHz'])
+            ax.pcolormesh(tm, fr.T, m.T, cmap='gray_r')
+
+        PlotHelper.set_time_ticks(ax, with_date=True)
+        ax.set_xlim(PlotHelper.lim_daily(np.concatenate([tm for tm in time_marks])))
+
+        title = lang_string({'ru': 'Фильтрующая маска',
+                             'en': 'Filtering mask'}, language)
+        ax.set_title(title)
+        xlabel = lang_string({'ru': 'Время, UT', 'en': 'Time, UT'}, language)
+        ax.set_xlabel(xlabel)
+        ylabel = lang_string({'ru': 'Частота, МГц', 'en': 'Frequency, MHz'},
+                             language)
+        ax.set_ylabel(ylabel)
+
+        fig.tight_layout()
+
+        save_name = f'calibration_mask_ch{ch}'
+        fig.savefig(save_folder / save_name)
+
+        plt.close(fig)
+
+
+@plot_languages()
 def plot_absolute_daily_spectra(calib_info: CalibrationInfo, save_folder: Path, colored=True,
                                 figsize=FIGSIZE_ONELONG, timeout=dt.timedelta(minutes=10),
                                 level=None, language=None):
@@ -430,6 +468,54 @@ def plot_absolute_daily_spectra(calib_info: CalibrationInfo, save_folder: Path, 
 
 
 @plot_languages()
+def plot_tracks_with_fitted_position(sun_pattern_info: SunPatternInfo, save_folder: Path,
+                                     figsize=FIGSIZE_ONELONG, language=None):
+    time_marks = sun_pattern_info.time_marks
+    freqs = sun_pattern_info.frequencies
+    fitted_freqs = sun_pattern_info.visible_max_freqs
+    spectra = sun_pattern_info.spectra
+    channels = sun_pattern_info.channels
+    n_ch = len(channels)
+    assert n_ch > 0
+
+    fig = plt.figure(figsize=figsize)
+    ext_time_marks = PlotHelper.pcolor_adjust_coordinates(time_marks)
+
+    xlabel = lang_string({'ru': 'Время, UT', 'en': 'Time, UT'}, language)
+    ylabel = lang_string({'ru': 'Индекс частоты', 'en': 'Index of frequency'}, language)
+    title = lang_string({
+        'ru': 'Треки мощности и фиттированным максимумом коэффициента когерентности',
+        'en': 'Power tracks with fitted coherence coefficient maximum'},
+        language
+    )
+
+    args = np.argmin(np.abs(freqs['MHz'] - fitted_freqs['MHz'][:, None]), axis=1)
+
+    for row_num, ch in enumerate(channels):
+        ax = plt.subplot(n_ch, 1, row_num + 1)
+        if row_num == 0:
+            ax.set_title(title)
+
+        spectrum = spectra[ch]
+        spectrum = np.ma.array(spectrum, mask=np.isnan(spectrum))
+
+        low, upp = PlotHelper.autolevel(spectrum.ravel())
+
+        ax.pcolormesh(ext_time_marks, np.arange(0, freqs.shape[1] + 1), spectrum.T,
+                      vmin=low, vmax=upp)
+        ax.plot(time_marks, args, color='red')
+
+        PlotHelper.set_time_ticks(ax, with_date=True)
+        ax.set_ylabel(ylabel)
+
+    ax.set_xlabel(xlabel)
+    fig.tight_layout()
+
+    save_name = 'cut_tracks'
+    fig.savefig(save_folder / save_name)
+
+
+@plot_languages()
 def plot_sun_pattern_vs_power(sun_pattern_info: SunPatternInfo, save_folder: Path, colored=True,
                               figsize=FIGSIZE_ONELONG, language=None):
     time_marks = sun_pattern_info.time_marks
@@ -437,27 +523,34 @@ def plot_sun_pattern_vs_power(sun_pattern_info: SunPatternInfo, save_folder: Pat
     channels = list(conv_pattern.keys())
     power = sun_pattern_info.max_power
     pattern = sun_pattern_info.pattern
+    masks = sun_pattern_info.main_beam_masks
 
     power_label = {'en': 'Receiver power', 'ru': 'Принятая мощность'}[language]
     conv_pattern_label = {'en': 'Convolved pattern', 'ru': 'Свертка с ДН'}[language]
 
     for ch in channels:
+        mask = masks[ch]
+
         fig = plt.figure(figsize=figsize)
-        title = {'en': f'Received power vs convolved pattern (ch = {ch})',
-                 'ru': f'Принятая мощность и свертка с ДН (кан = {ch})'}[language]
+        upper_title = {'en': f'Received power vs convolved pattern (ch = {ch})',
+                       'ru': f'Принятая мощность и свертка с ДН (кан = {ch})'}[language]
+        lower_title = {'en': f'Pattern and main beam part (ch = {ch})',
+                       'ru': f'ДН и часть основного лепестка (ch = {ch})'}[language]
 
         ax_conv_pattern = plt.subplot(211)  # type: plt.Axes
-        ax_conv_pattern.plot(time_marks, conv_pattern[ch], label=power_label, color='C0')
+        ax_conv_pattern.plot(time_marks[mask], conv_pattern[ch][mask],
+                             label=power_label, color='C0')
         ax_power = ax_conv_pattern.twinx()
-        ax_power.plot(time_marks, power[ch], label=conv_pattern_label, color='C1')
+        ax_power.plot(time_marks[mask], power[ch][mask], label=conv_pattern_label, color='C1')
 
         PlotHelper.set_time_ticks(ax_conv_pattern, with_date=True)
 
-        ax_conv_pattern.set_title(title)
+        ax_conv_pattern.set_title(upper_title)
         ax_conv_pattern.legend()
 
         ax_pattern = plt.subplot(212)  # type: plt.Axes
         ax_pattern.plot(time_marks, pattern[ch])
+        ax_pattern.plot(time_marks[mask], pattern[ch][mask], color='red')
         PlotHelper.set_time_ticks(ax_pattern, with_date=True)
 
         fig.tight_layout()
@@ -475,7 +568,7 @@ def plot_sun_flux(sun_flux_info: SunFluxInfo, save_folder: Path, colored=True,
     time_marks = sun_flux_info.time_marks
     sun_flux = sun_flux_info.sun_flux
 
-    watts2sfu = 10e22
+    watts2sfu = 1e22
 
     label = {'en': 'Ch = {}', 'ru': 'Кан = {}'}[language]
     xlabel = {'en': 'Time, UT', 'ru': 'Время, UT'}[language]
@@ -484,7 +577,7 @@ def plot_sun_flux(sun_flux_info: SunFluxInfo, save_folder: Path, colored=True,
     fig = plt.figure(figsize=figsize)
     ax = plt.subplot(111)  # type: plt.Axes
     for ch in channels:
-        ax.plot(time_marks, sun_flux[ch] * watts2sfu, label=label.format(label))
+        ax.plot(time_marks[ch], sun_flux[ch] * watts2sfu, label=label.format(label))
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)

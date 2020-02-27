@@ -1,13 +1,17 @@
+from collections import namedtuple, defaultdict
 from typing import Tuple, Union
 
+import datetime as dt
 import numpy as np
 from abc import ABCMeta
+from pathlib import Path
 
-from astropy.coordinates import EarthLocation, AltAz, get_sun
+from astropy.coordinates import EarthLocation, AltAz, get_sun, SkyCoord
 from astropy import units as u
 from astropy.time import Time
 
 from scipy.integrate import simps
+from scipy.interpolate import RectBivariateSpline
 from tqdm import tqdm
 
 from iisr.antenna.dnriisr import IISR_LAT, IISR_LON, IISR_HEIGHT, calc_pattern, topoc2ant, \
@@ -16,7 +20,172 @@ from iisr.antenna.sun_utils import get_smoothed_elliptic_sun, SUN_INTEGRATION_RE
     DEFAULT_SUN_FWHM
 from iisr.math import axis_angle, rotate_vector, spherical2cartesian, cartesian2spherical, \
     gauss_fwhm2var, gaussian_on_sphere
+from iisr.time import datetime2hour
 from iisr.units import Frequency
+
+
+radio_source_info = namedtuple('RadioSourceInfo', ['coord', 'flux'])
+
+
+def cyg_flux(freq_megahertz):
+    """
+    Flux of Cygnus-A radio source, assuming receiving beam is much wider than
+    source angular size.
+
+    Adopt model of spectrum from [1]:
+    S(f) = A0 * 10^(A1 log f/150MHz + A2 log^2 f/150MHz + A3 log^3 f/150MHz)
+    where A0 = 10690, A1 = -0.67, A2 = -0.24, A3 = 0.021
+
+    Parameters
+    ----------
+    freq_megahertz: float or array_like
+        Frequency, MHz.
+
+    Returns
+    -------
+    flux: u.Jy
+        Flux in Jansky (1e-26 W/(m^2 * Hz))
+
+    Notes
+    -----
+    [1] Heald et al, 2015, The LOFAR Multifrequency Snapshot Sky Survey (MSSS)
+    """
+    # Spectral coefficients from the paper
+    A0 = 10690
+    A1 = -0.67
+    A2 = -0.24
+    A3 = 0.021
+    f0_MHz = 150
+
+    freq_megahertz = freq_megahertz / f0_MHz  # Avoid inplace operation on inputs
+    res = A0 * 10**(A1 * np.log(freq_megahertz)
+                    + A2 * np.log(freq_megahertz) ** 2
+                    + A3 * np.log(freq_megahertz) ** 3)
+    return res * u.Jy
+
+
+RADIO_SOURCES = {
+    'cyg': radio_source_info(
+        coord=SkyCoord(ra='19h59m28.3566s', dec='40d44m2.097s', frame='icrs'),
+        flux=cyg_flux
+    ),
+    'cass': radio_source_info(
+        coord=SkyCoord(ra='23h23m27.94s', dec='58d48m42.4s', frame='icrs'),
+        flux=lambda x: 13000 * u.Jy
+    ),
+    'crab': radio_source_info(
+        coord=SkyCoord(ra='5h34m30.95s', dec='22d0m52.1s', frame='icrs'),
+        flux=lambda x: 1500 * u.Jy
+    ),
+}
+
+
+def parse_decibel_level(level):
+    if isinstance(level, str):
+        if level[-2:] != 'dB':
+            raise ValueError('level should be float or have "-3dB" format')
+        return 10 ** (float(level[:-2]) / 10)
+    else:
+        return level
+
+
+class RadioSourcePattern:
+    REFERENCE_DATE = dt.datetime(2000, 1, 1)
+    SAVE_PATH = Path(__file__).absolute().parent / 'sources_data'
+
+    def __init__(self, source_name, dnr_type):
+        self.dnr_type = dnr_type
+        self.source_name = source_name
+        save_path = self.SAVE_PATH / (dnr_type + '.npz')
+
+        try:
+            arr = np.load(str(save_path))
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f'File with pre-calculated pattern not found '
+                f'for {dnr_type} type'
+            )
+
+        try:
+            pattern = arr[source_name]
+        except KeyError:
+            raise KeyError(f'No source with name {source_name} in pre-calculated patterns')
+
+        self._interp = RectBivariateSpline(arr['hours'], arr['freqs'], pattern)
+
+    def calc_pattern(self, dates, freqs_MHz, return_2d=True):
+        """
+        Estimate pattern at given dates and frequencies.
+
+        Parameters
+        ----------
+        dates: sequence of length N
+            Datetimes.
+        freqs_MHz: sequence of length M
+            Frequencies, MHz.
+        return_2d: bool
+            If True, return NxM pattern.
+            If False, return 1-D pattern with size N. Raise error if M != N.
+
+        Returns
+        -------
+        pattern: np.ndarray
+            Antenna pattern.
+        """
+        if isinstance(dates, np.ndarray):
+            dates = dates.astype(dt.datetime)
+        diffs = [date - self.REFERENCE_DATE for date in dates]
+        dates = [date + dt.timedelta(hours=(24 / 365.2425) * diff.days)
+                 for date, diff in zip(dates, diffs)]
+        offset = np.array([datetime2hour(date) for date in dates])
+
+        if return_2d:
+            mesh_offset, mesh_freqs = np.meshgrid(offset, freqs_MHz, indexing='ij')
+            pattern = self._interp(mesh_offset.ravel(), mesh_freqs.ravel(),
+                                   grid=False)
+            return pattern.reshape((offset.size, freqs_MHz.size))
+        else:
+            if len(offset) != len(freqs_MHz):
+                raise ValueError('Input arrays must have equal size')
+            pattern = self._interp(offset, freqs_MHz, grid=False)
+            return pattern
+
+    def source_mask(self, dates, freqs, level='-10dB'):
+        pattern = self.calc_pattern(dates, freqs)
+        level = parse_decibel_level(level)
+        return pattern > level
+
+    @classmethod
+    def calculate_source_daily_map(cls, date_step_minutes=1., freq_step_MHz=0.0125,
+                                   freq_range=(149., 163.),
+                                   dnr_types=('upper', 'lower', 'both')):
+        """
+        Calculate IISR antenna pattern at the position of different radio sources
+        during reference day. Results of the calculation will be stored
+        and may be used to find sources for any given date and frequency.
+
+        The calculation does not include the Sun.
+        """
+        dates = np.arange(cls.REFERENCE_DATE, cls.REFERENCE_DATE + dt.timedelta(days=1),
+                          dt.timedelta(minutes=date_step_minutes))
+        hours = np.array([datetime2hour(dtime) for dtime in dates.astype(dt.datetime)])
+        freqs = np.arange(freq_range[0], freq_range[1], freq_step_MHz)
+
+        for dnr_type in dnr_types:
+            shape = dates.size, freqs.size
+            power = defaultdict(lambda: np.empty(shape, dtype=float))
+
+            for i, freq in enumerate(freqs):
+                print('[{}/{}] Calculation for {:.3f} MHz'.format(i + 1, freqs.size, freq))
+                sources = iisr_find_source(dates, freq, dnr_type=dnr_type,
+                                           level=None, filter_above_horizon=False)
+                for source in sources:
+                    power[source.name][:, i] = source.pattern
+
+            power['hours'] = hours
+            power['freqs'] = freqs
+            save_path = cls.SAVE_PATH / dnr_type
+            np.savez(str(save_path), **power)
 
 
 class Kernel(metaclass=ABCMeta):
@@ -244,7 +413,7 @@ def sun_pattern_1d(time_marks: np.ndarray, freqs: Frequency, dnr_type: str, kern
 
     patterns = []
     convolved_patterns = []
-    for tm, freq, vector in tqdm(zip(time_marks, freqs['MHz'], zip(theta, phi)),
+    for freq, vector in tqdm(zip(freqs['MHz'], zip(theta, phi)),
                                  total=len(time_marks),
                                  desc='Estimate convolution of pattern and brightness'):
         pat, conv_pat = kernel.convolve_at(vector, freq, dnr_type=dnr_type)
@@ -252,6 +421,23 @@ def sun_pattern_1d(time_marks: np.ndarray, freqs: Frequency, dnr_type: str, kern
         convolved_patterns.append(conv_pat)
 
     return np.array(patterns), np.array(convolved_patterns)
+
+
+def sun_point_pattern_2d(time_marks: np.ndarray, frequencies: Frequency, dnr_type: str
+                         ) -> np.ndarray:
+    """Time marks and frequencies form 2D array (as in scan data)"""
+    sun_coord = get_sun(Time(time_marks))
+    radar_loc = EarthLocation(lat=IISR_LAT * u.rad, lon=IISR_LON * u.rad, height=IISR_HEIGHT)
+    observer_altaz = AltAz(location=radar_loc, obstime=time_marks)
+
+    sun_coord_altaz = sun_coord.transform_to(observer_altaz)
+    gam, eps = topoc2ant(sun_coord_altaz.alt.radian, sun_coord_altaz.az.radian)
+
+    pattern = np.empty((time_marks.size, frequencies.size), dtype=np.float)
+    for freq_num, freq in enumerate(frequencies['MHz']):
+        pattern[:, freq_num] = calc_pattern(freq, eps, gam, dnr_type=dnr_type)
+
+    return pattern
 
 
 def find_sun_max_frequencies(time_marks: np.ndarray) -> Frequency:

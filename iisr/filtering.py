@@ -6,7 +6,7 @@ import numpy as np
 from abc import ABCMeta, abstractmethod
 
 
-__all__ = ['MeanStdFilter', 'MeanAdAroundMeanFilter',
+__all__ = ['TimeSeriesFilter', 'MeanStdFilter', 'MeanAdAroundMeanFilter',
            'MeanAdAroundMedianFilter', 'MedianAdAroundMedianFilter',
            'filter_outliers', 'OutlierTimeSeriesFilter']
 

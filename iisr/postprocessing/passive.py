@@ -13,8 +13,10 @@ from scipy.interpolate import interp1d
 
 from iisr.antenna.dnriisr import approximate_directivity
 from iisr.antenna.sky_noise import SkyNoiseInterpolator
-from iisr.antenna.radio_sources import GaussianKernel, sun_pattern_1d, find_sun_max_frequencies
+from iisr.antenna.radio_sources import GaussianKernel, sun_pattern_1d, find_sun_max_frequencies, \
+    sun_point_pattern_2d, RADIO_SOURCES, parse_decibel_level, RadioSourcePattern
 from iisr.fitting import fit_sky_noise_2d, fit_gauss, fit_sky_noise_1d
+from iisr.filtering import OutlierTimeSeriesFilter, TimeSeriesFilter
 from iisr.preprocessing.passive import PassiveScan, PassiveTrack, PassiveMode, \
     PassiveTrackParameters
 from iisr.data_manager import DataManager
@@ -143,7 +145,8 @@ class CalibrationInfo(PickleLoadable):
         self._bias_interpolator = None
 
         self.dates = scan_data.dates
-
+        self.channels = scan_data.parameters.channels
+        self.time_marks = scan_data.time_marks
         self.frequencies = scan_data.frequencies
         self.central_frequencies = Frequency(
             np.array([f['Hz'] for f in scan_data.parameters.central_frequencies]),
@@ -156,6 +159,8 @@ class CalibrationInfo(PickleLoadable):
             self.apply_1d_fit = False
             self.band_masks = self._get_band_masks()
 
+        self.valid_masks = {ch: None for ch in self.channels}
+
         # Calculate sky noise power for given date
         sky_power = sky_power.values
 
@@ -164,13 +169,19 @@ class CalibrationInfo(PickleLoadable):
         for ch in scan_data.parameters.channels:
             spectrum = scan_data.spectra[ch]
 
+            filt = OutlierTimeSeriesFilter('MedianAdMedian', 5, window=100,
+                                           timeout=dt.timedelta(minutes=10),
+                                           pad_value=(np.nan, np.nan))
+            valid_mask = self._calc_filter_mask(ch, spectrum, outlier_filter=filt)
+            self.valid_masks[ch] = valid_mask
+
             if self.apply_1d_fit:
                 fit_result[ch] = self._fit1d(
-                    scan_data.time_marks, spectrum, sky_power[ch], time_mask=~np.isnan(spectrum)
+                    scan_data.time_marks, spectrum, sky_power[ch], time_mask=valid_mask
                 )
             else:
                 fit_result[ch] = self._fit2d(
-                    scan_data.time_marks, spectrum, sky_power[ch], time_mask=~np.isnan(spectrum)
+                    scan_data.time_marks, spectrum, sky_power[ch], time_mask=valid_mask
                 )
         self.gains = {ch: result.gains for ch, result in fit_result.items()}
         self.biases = {ch: result.biases for ch, result in fit_result.items()}
@@ -181,12 +192,46 @@ class CalibrationInfo(PickleLoadable):
         self._gain_interpolators = {}
         self._bias_interpolators = {}
 
-        self.channels = scan_data.parameters.channels
-        self.time_marks = scan_data.time_marks
         self.calibrated_spectra = {
             ch: self.calibrate_power(ch, self.frequencies, scan_data.spectra[ch])
             for ch in self.channels
         }
+
+    def _calc_filter_mask(self, ch: Channel,
+                          spectrum: np.ndarray,
+                          blank_level_sources: str = '-20dB',
+                          blank_level_sun: str = '-40dB',
+                          outlier_filter: TimeSeriesFilter = None) -> np.ndarray:
+        valid_mask = np.ones((self.time_marks.size, self.frequencies.size), dtype=bool)
+        for source in RADIO_SOURCES:
+            pattern = RadioSourcePattern(source, ch.horn)
+            source_mask = pattern.source_mask(
+                self.time_marks,
+                self.frequencies['MHz'],
+                level=blank_level_sources
+            )
+            valid_mask &= ~source_mask
+
+        pattern = sun_point_pattern_2d(self.time_marks, self.frequencies, ch.horn)
+        level = parse_decibel_level(blank_level_sun)
+        valid_mask &= ~(pattern > level)
+
+        if outlier_filter is not None:
+            outliers_mask = self._filter_outliers(outlier_filter, spectrum, valid_mask)
+            valid_mask &= ~outliers_mask
+        return valid_mask
+
+    def _filter_outliers(self, filt: TimeSeriesFilter, spectrum: np.ndarray,
+                         valid_mask: np.ndarray):
+        outlier_mask = np.zeros(spectrum.shape, dtype=bool)
+        for freq_num, sp in tqdm(enumerate(spectrum.T), total=spectrum.shape[1],
+                                 desc='Calibration: filtering outliers'):
+            # Values that are already blanked should not be taken
+            # into consideration during filtering
+            mask = valid_mask[:, freq_num]
+            sp = np.ma.array(sp, mask=~mask)
+            outlier_mask[:, freq_num] |= filt(self.time_marks, sp).mask
+        return outlier_mask
 
     def _get_band_masks(self):
         central_frequencies_khz = self.central_frequencies['kHz']
@@ -281,6 +326,8 @@ class CalibrationInfo(PickleLoadable):
 
 
 class SunPatternInfo(PickleLoadable):
+    MIN_N_FREQ_FOR_GAUSSIAN_FIT = 11
+
     class PseudoPassiveTrack:
         class Params:
             pass
@@ -295,7 +342,8 @@ class SunPatternInfo(PickleLoadable):
             self.coherence = coherence
             self.parameters = params
 
-    def __init__(self, *, sun_track_data: PassiveTrack = None, scan_data: PassiveScan = None):
+    def __init__(self, *, sun_track_data: PassiveTrack = None, scan_data: PassiveScan = None,
+                 main_beam_level='-3dB'):
         if (sun_track_data is None and scan_data is None) \
                 or (sun_track_data is not None and scan_data is not None):
             raise ValueError('Either sun track or scan data should be provided')
@@ -316,7 +364,11 @@ class SunPatternInfo(PickleLoadable):
 
         self.date = track.dates[0]
         self.time_marks = track.time_marks
-        self.pattern_value = None  # Value of the IISR pattern in the Sun position
+        # TODO: frequencies and spectra are here only to access track extracted from scan data
+        # TODO: To avoid this excess copy, track data should be formed from scan data separately
+        self.frequencies = track.frequencies
+        self.spectra = track.spectra
+
         self.bin_band = Frequency(
             track.frequencies['Hz'][0, 1] - track.frequencies['Hz'][0, 0],
             'Hz'
@@ -325,8 +377,11 @@ class SunPatternInfo(PickleLoadable):
 
         # Fit gaussian coherence to find frequency where maximal Sun intensity supposed to be
         # This should remove variation of pattern caused by temperature
-        visible_max_freq_args = find_max_track_frequencies(track.frequencies, track.coherence,
-                                                           clip_by=30)
+        if track.frequencies.shape[1] >= self.MIN_N_FREQ_FOR_GAUSSIAN_FIT:
+            visible_max_freq_args = find_max_track_frequencies(track.frequencies, track.coherence,
+                                                               clip_by=30)
+        else:
+            visible_max_freq_args = np.argmax(np.abs(track.coherence), axis=1)
 
         def take_each(arr: np.ndarray, indices: np.ndarray):
             return np.array([sl[idx] for sl, idx in zip(arr, indices)])
@@ -338,9 +393,10 @@ class SunPatternInfo(PickleLoadable):
             ch: take_each(sp, visible_max_freq_args) for ch, sp in track.spectra.items()
         }
         self.convolution_kernel = 'gaussian'
-        self.pattern = {}
-        self.sky_power = {}
+        self.pattern = {}  # Value of the IISR pattern in the Sun position
         self.convolved_pattern = {}
+        self.sky_power = {}
+        self.main_beam_masks = {}  # Masks for data when the Sun crossed main beam
         kernel = GaussianKernel()
         self.kernel_integral = kernel.integral
         for ch in track.parameters.channels:
@@ -358,6 +414,11 @@ class SunPatternInfo(PickleLoadable):
             ])
             self.sky_power[ch] = track_sky_noise * self.bin_band['Hz'] * Boltzmann
 
+            main_beam_mask = pattern > parse_decibel_level(main_beam_level)
+            args = np.where(main_beam_mask)[0]
+            self.main_beam_masks[ch] = np.zeros_like(main_beam_mask)
+            self.main_beam_masks[ch][args[0]:args[-1]+1] = True
+
     def _extract_sun_track_from_scan_data(self, scan_data: PassiveScan) -> PseudoPassiveTrack:
         # Find frequencies with expected maximum power from a source at the position of the Sun
         expected_max_freqs = find_sun_max_frequencies(scan_data.time_marks)
@@ -368,7 +429,7 @@ class SunPatternInfo(PickleLoadable):
         # Cut the 1 MHz Sun track from coherence and power data
         margin_frequency = 1  # MHz
         freq_delta = scan_data.frequencies['MHz'][1] - scan_data.frequencies['MHz'][0]
-        margin = int(margin_frequency / freq_delta)
+        margin = max(int(margin_frequency / freq_delta), self.MIN_N_FREQ_FOR_GAUSSIAN_FIT - 1)
 
         if margin % 2 == 0:
             margin_args = [margin // 2, margin // 2]
@@ -447,22 +508,25 @@ class SunFluxInfo(PickleLoadable):
     def __init__(self, sun_pattern: SunPatternInfo, calibration: CalibrationInfo):
         self.date = sun_pattern.date
         self.channels = sun_pattern.channels
-        self.time_marks = sun_pattern.time_marks
+        self.time_marks = {}
         self.sun_flux = {}
 
         polarization = 1 / 2  # coefficient to get total flux
 
-        frequencies = sun_pattern.visible_max_freqs
-        wavelengths = speed_of_light / frequencies['Hz']
         bandwidth = sun_pattern.bin_band
         integral_over_normalized_brightness = sun_pattern.kernel_integral
 
         for ch in sun_pattern.channels:
-            raw_power = sun_pattern.max_power[ch]
-            sky_power = sun_pattern.sky_power[ch]
+            mask = sun_pattern.main_beam_masks[ch]
+            self.time_marks[ch] = sun_pattern.time_marks[mask]
+            frequencies = Frequency(sun_pattern.visible_max_freqs['Hz'][mask], 'Hz')
+            wavelengths = speed_of_light / frequencies['Hz']
+
+            raw_power = sun_pattern.max_power[ch][mask]
+            sky_power = sun_pattern.sky_power[ch][mask]
             cal_raw_power = calibration.calibrate_power(ch, frequencies, raw_power)
             sun_power = cal_raw_power - sky_power
-            conv_pattern = sun_pattern.convolved_pattern[ch]
+            conv_pattern = sun_pattern.convolved_pattern[ch][mask]
 
             directivity = approximate_directivity(frequencies['MHz'], dnr_type=ch.horn)
             denominator = conv_pattern \
